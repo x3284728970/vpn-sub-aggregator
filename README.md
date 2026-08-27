@@ -2,6 +2,37 @@
 
 每 48 小时自动运行一次，聚合 5 个来源的节点并生成统一订阅。
 
+## 订阅方式（二选一）
+
+### 方式 A：GitHub Gist（推荐）
+不需要仓库公开，不需要 Pages，私有 Gist 直链直接当订阅链接。
+
+**优点：**
+- 不需要把仓库设为 Public
+- 不需要配置 GitHub Pages
+- 直链短，直接导入客户端
+
+**步骤：**
+
+1. 创建 GitHub Personal Access Token（Classic）：
+   - __Settings → Developer settings → Personal access tokens → Tokens (classic)__
+   - 勾选 `gist` 权限即可
+   - 复制 token
+
+2. 仓库 **Settings → Secrets and variables → Actions** → 添加：
+   - `MY_GITHUB_TOKEN` = 第 1 步的 PAT
+   - `BEN_TOKEN` = 你的 ben_1.py 服务商 Token（可选）
+
+3. **Actions → VPN Sub Aggregator → Run workflow**，跑完后查看日志，会输出类似：
+   ```
+   [GIST] 创建成功，raw 链接: https://gist.githubusercontent.com/raw/xxx/sub_b64.txt
+   ```
+
+4. 把那个 raw 链接粘贴到 Shadowrocket / Clash / V2RayN 等客户端即可
+
+### 方式 B：GitHub Pages（已移除）
+如果后续需要，可以把 Pages 部署加回来，但默认只走 Gist。
+
 ## 目录
 ```
 .
@@ -17,54 +48,36 @@
 └── README.md
 ```
 
-## 部署到 GitHub (Private Repo)
+## 部署到 GitHub
 
-### 1. 创建私有仓库
-在 GitHub 上新建仓库，**务必选择 Private**（避免节点链接公开扫描）。
-
-### 2. 推送代码
+### 1. 推送代码
 ```bash
 git init
 git add .
-git commit -m "feat: 初始化聚合订阅"
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+git commit -m "feat: VPN 节点聚合订阅（Gist 版）"
+git remote add origin https://github.com/<你的用户名>/vpn-sub-aggregator.git
 git branch -M main
 git push -u origin main
 ```
 
-### 3. 设置 Secrets
+### 2. 配置 Secrets
 进入仓库 **Settings → Secrets and variables → Actions → New repository secret**：
 
 | Name | 说明 |
 |------|------|
-| `BEN_TOKEN` | `ben_1.py` 所需 Token（从服务商获取） |
+| `MY_GITHUB_TOKEN` | GitHub PAT（Classic，勾选 `gist` scope） |
+| `BEN_TOKEN` | `ben_1.py` 所需 Token（可选，未设置则跳过该来源） |
 
-### 4. 启用 GitHub Pages
-**Settings → Pages → Source** 选择 `gh-pages` 分支，根目录 `/ (root)`。
-
-### 5. 订阅链接
-Pages 部署完成后，你的订阅链接为：
-
-```
-https://<用户名>.github.io/<仓库名>/sub_b64.txt
-```
-
-> 注意：因为仓库是 Private，GitHub Pages 仅对仓库协作者开放，需要登录 GitHub 才能访问，天然防止了公网扫库。
-
-### 6. 安装到设备
-- **Shadowrocket / Clash / V2RayN** 等支持 Base64 订阅的客户端，直接粘贴上面的 URL 即可。
-- 如果客户端因 GitHub Pages 需要登录而无法直接导入，可以手动下载 `sub_b64.txt` 后导入，或改用本地方案。
+### 3. 手动触发
+**Actions → VPN Sub Aggregator → Run workflow**
 
 ## 隐私与安全
-- 所有脚本的 API 凭证尽量通过 **GitHub Secrets** 注入，不硬编码到文件。
-- 仓库设为 Private，Pages 默认不会暴露给未授权用户。
-- `sub_b64.txt` 包含所有有效节点，泄露后可直接使用，建议仅通过安全的 GitHub Pages 链接访问。
-- 各脚本已做基础节流（如 `ben_1.py` 的 1s 间隔），降低被服务商识别封禁的风险。
-
-## 手动触发
-进入 **Actions → VPN Sub Aggregator → Run workflow**，可手动强制执行一次立即更新。
+- 订阅放在 **私有 Gist**，知道 raw 链接的人才能访问
+- `aggregate.py` 会自动排除敏感中间文件（`last_account.json`、全量配置等）
+- `sub_b64.txt` 包含所有有效节点，泄露后可直接使用，**不要发公开聊天**
+- 建议 Gist 链接仅自己使用，不要分享
 
 ## 自定义
-- 修改定时频率：编辑 `.github/workflows/aggregate.yml` 中的 `cron`（GitHub cron 格式为 `分 时 日 月 周`）
-- 剔除某个来源：修改 `aggregate.py` 中的 `run_script` 调用
-- 节点去重规则：修改 `aggregate.py` 的 `merge_links` 中的 `key` 生成逻辑
+- 修改定时频率：编辑 `.github/workflows/aggregate.yml` 中的 `cron`
+- 剔除某个来源：注释掉 `aggregate.py` 里对应的 `run_script("xxx.py")`
+- 节点去重规则：修改 `aggregate.py` 的 `merge_all` 中的 `key` 生成逻辑

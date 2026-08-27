@@ -2,6 +2,7 @@
 """
 VPN 节点聚合脚本
 运行 scripts/ 目录下各提取脚本，合并去重并输出 Base64 订阅文件。
+可选：上传到 GitHub Private Gist，获得直链订阅地址。
 """
 
 import os
@@ -14,6 +15,11 @@ from pathlib import Path
 from datetime import datetime
 import urllib.parse
 
+try:
+    import requests
+except ImportError:
+    requests = None
+
 BASE_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = BASE_DIR / "scripts"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -21,16 +27,11 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # 必须排除的敏感/中间文件
 EXCLUDE_FILES = {
-    # devpn.py 的账号信息（含 token/钱包）
     "last_account.json",
-    # ben_1.py 的原始全量配置（体积大且包含重复）
     "all_nodes_full_configs.json",
     "all_outbounds_merged.json",
-    # ben_1.py 的 Base64 输出（和 sub_b64 重复）
     "subscription_base64.txt",
-    # ben_1.py 的中文名输出
     "all_nodes_sharable_links.txt",
-    # Windows 环境下的输出
     "all_nodes_full_configs (1).json",
 }
 
@@ -42,6 +43,111 @@ EXPECTED_NODE_FILES = {
     "ben_1.py": ["all_nodes_sharable_links.txt"],
     "devpn.py": ["nodes.txt", "devpn.txt"],
 }
+
+# ================================================================
+# GitHub Gist 上传（私有 Gist，无需仓库/Pages 设置）
+# ================================================================
+
+GIST_DESC = "VPN 节点订阅（自动更新）"
+GIST_FILENAME = "sub_b64.txt"
+
+
+def _github_token() -> str | None:
+    """优先用 MY_GITHUB_TOKEN，兼容 GITHUB_TOKEN（CI 默认）"""
+    token = os.environ.get("MY_GITHUB_TOKEN", "").strip()
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN", "").strip()
+    return token or None
+
+
+def _find_gist_id(token: str) -> str | None:
+    """按 description 查找已存在的 Gist ID"""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    page = 1
+    while True:
+        try:
+            r = requests.get(
+                "https://api.github.com/gists",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+                timeout=30,
+            )
+        except Exception as e:
+            print(f"[GIST] 列出 Gist 失败: {e}")
+            return None
+        if r.status_code != 200:
+            return None
+        gists = r.json()
+        if not gists:
+            return None
+        for g in gists:
+            if g.get("description") == GIST_DESC:
+                files = g.get("files", {})
+                if GIST_FILENAME in files:
+                    return g["id"]
+        if len(gists) < 100:
+            return None
+        page += 1
+
+
+def upload_to_gist(content: str) -> str | None:
+    """上传 Base64 订阅内容到私有 Gist，返回 raw 直链"""
+    if requests is None:
+        print("[GIST] requests 未安装，跳过 Gist 上传")
+        return None
+    token = _github_token()
+    if not token:
+        print("[GIST] 未设置 MY_GITHUB_TOKEN / GITHUB_TOKEN，跳过 Gist 上传")
+        return None
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    gist_id = _find_gist_id(token)
+    payload = {
+        "description": GIST_DESC,
+        "public": False,
+        "files": {GIST_FILENAME: {"content": content}},
+    }
+
+    try:
+        if gist_id:
+            r = requests.patch(
+                f"https://api.github.com/gists/{gist_id}",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            action = "更新"
+        else:
+            r = requests.post(
+                "https://api.github.com/gists",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            action = "创建"
+
+        if r.status_code in (200, 201):
+            gist_id = r.json()["id"]
+            raw_url = f"https://gist.githubusercontent.com/raw/{gist_id}/{GIST_FILENAME}"
+            print(f"[GIST] {action}成功，raw 链接: {raw_url}")
+            return raw_url
+        else:
+            print(f"[GIST] {action}失败: {r.status_code} {r.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"[GIST] 上传异常: {e}")
+        return None
+
+
+# ================================================================
+# 脚本运行
+# ================================================================
 
 
 def run_script(name, extra_env=None):
@@ -58,8 +164,6 @@ def run_script(name, extra_env=None):
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-
-    # ben_1.py 的开头可能有 Termux 提示，这里确保非交互
     env.setdefault("PYTHONUNBUFFERED", "1")
 
     try:
@@ -94,11 +198,14 @@ def run_script(name, extra_env=None):
         return False
 
 
+# ================================================================
+# 收集与合并
+# ================================================================
+
+
 def collect_outputs():
     """收集 scripts/ 和 OUTPUT_DIR 下的节点链接文件，自动排除敏感中间文件。"""
     candidates = []
-
-    # 递归搜索 scripts/
     for root, dirs, files in os.walk(str(SCRIPTS_DIR)):
         for f in files:
             fp = Path(root) / f
@@ -106,14 +213,10 @@ def collect_outputs():
                 continue
             if f.endswith((".txt", ".json", ".log")):
                 candidates.append(fp)
-
-    # 也收集 OUTPUT_DIR（仅供向上兼容）
     for f in OUTPUT_DIR.iterdir():
         if f.is_file() and f.name not in EXCLUDE_FILES:
             candidates.append(f)
-
     unique = sorted(set(candidates))
-
     print(f"[*] 收集到 {len(unique)} 个输出文件:")
     for u in unique:
         try:
@@ -121,7 +224,6 @@ def collect_outputs():
         except Exception:
             size = -1
         print(f"    - {u.relative_to(SCRIPTS_DIR)} ({size} bytes)")
-
     return unique
 
 
@@ -133,22 +235,12 @@ def is_node_line(line: str) -> bool:
 
 
 def extract_links(path: Path):
-    """从单个文件中提取有效节点链接。"""
     links = []
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
         for line in text.splitlines():
             line = line.strip()
             if is_node_line(line):
-                # 对 ben_1.py 的 JSON outbounds 做兜底处理
-                if line.startswith("{") and line.endswith("}"):
-                    try:
-                        ob = json.loads(line)
-                        if ob.get("type") in ("vless", "shadowsocks"):
-                            # 这里无法直接生成链接，跳过 JSON 对象行
-                            continue
-                    except Exception:
-                        pass
                 links.append(line)
     except Exception as e:
         print(f"[WARN] 读取 {path} 失败: {e}")
@@ -156,10 +248,7 @@ def extract_links(path: Path):
 
 
 def merge_all(file_list):
-    """
-    合并去重。
-    去重键：取 # 之前 + 查询参数标准化（忽略顺序差异）
-    """
+    """合并去重。对 query 参数排序，消除顺序差异导致无法去重。"""
     seen = set()
     merged = []
 
@@ -167,16 +256,13 @@ def merge_all(file_list):
         links = extract_links(fpath)
         for link in links:
             try:
-                # 分离 fragment
                 if "#" in link:
                     base, frag = link.split("#", 1)
-                    # 对 fragment 做 URL decode，避免同一节点不同编码被判定为不同
                     frag = urllib.parse.unquote(frag)
                 else:
                     base = link
                     frag = ""
 
-                # 对 query 参数排序，消除顺序差异导致无法去重
                 if "?" in base:
                     proto_and_rest, query = base.split("?", 1)
                     params = urllib.parse.parse_qsl(query, keep_blank_values=True)
@@ -194,7 +280,6 @@ def merge_all(file_list):
                     seen.add(key)
                     merged.append(link)
             except Exception as e:
-                # 解析异常时保守处理：整行作为 key
                 if link and link not in seen:
                     seen.add(link)
                     merged.append(link)
@@ -219,6 +304,11 @@ def count_by_type(links):
     return stats
 
 
+# ================================================================
+# main
+# ================================================================
+
+
 def main():
     print("=" * 60)
     print("VPN 节点聚合器")
@@ -236,7 +326,6 @@ def main():
         print("[*] 未设置 BEN_TOKEN，跳过 ben_1.py")
 
     # 依次运行提取脚本
-    # 注意：顺序不影响最终结果，但失败会继续下一个
     results = {}
     results["__.py"] = run_script("__.py")
     results["TF__.py"] = run_script("TF__.py")
@@ -272,6 +361,13 @@ def main():
     sub_b64.write_text(b64_content, encoding="utf-8")
     print(f"[+] Base64 订阅: {sub_b64} (长度 {len(b64_content)})")
 
+    # 上传到 GitHub Gist（私有 Gist，直链当订阅地址）
+    gist_raw_url = upload_to_gist(b64_content)
+    if gist_raw_url:
+        print(f"[+] 订阅链接: {gist_raw_url}")
+    else:
+        print(f"[!] Gist 上传失败或跳过，订阅仅在本地: file://{sub_b64}")
+
     # 写出统计报告
     report = {
         "timestamp": datetime.now().isoformat(),
@@ -280,6 +376,7 @@ def main():
         "source_files": [str(p.relative_to(BASE_DIR)) for p in files],
         "results": {k: ("skip" if v is None else ("ok" if v else "fail")) for k, v in results.items()},
         "ben_token_set": bool(ben_token),
+        "gist_raw_url": gist_raw_url,
     }
     report_path = OUTPUT_DIR / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -287,7 +384,6 @@ def main():
 
     print("=" * 60)
     print("聚合完成")
-    print(f"订阅链接: {sub_b64}")
     print(f"结束时间: {datetime.now().isoformat()}")
     print("=" * 60)
 

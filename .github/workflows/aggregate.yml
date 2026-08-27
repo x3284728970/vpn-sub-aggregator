@@ -1,13 +1,12 @@
 name: VPN Sub Aggregator
 
-# 互斥组：防止上一轮还没跑完就触发下一轮
 concurrency:
   group: vpn-sub-aggregator
   cancel-in-progress: false
 
 on:
   schedule:
-    - cron: "0 0 */2 * *"   # 每 48 小时的 00:00 UTC 执行一次
+    - cron: "0 0 */2 * *"
   workflow_dispatch:
     inputs:
       ben_token:
@@ -35,9 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Aggregate nodes
+      - name: Aggregate nodes & upload to Gist
         env:
           BEN_TOKEN: ${{ inputs.ben_token || secrets.BEN_TOKEN }}
+          MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
           python aggregate.py
 
@@ -52,14 +52,3 @@ jobs:
             output/report.json
           retention-days: 90
           compression-level: 9
-
-      - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./output
-          destination_dir: .
-          keep_files: false
-          publish_branch_name: gh-pages
-          enable_jekyll: false
