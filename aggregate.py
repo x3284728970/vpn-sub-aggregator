@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""
+VPN 节点聚合脚本
+运行 scripts/ 目录下各提取脚本，合并去重并输出 Base64 订阅文件。
+"""
+
+import os
+import sys
+import base64
+import subprocess
+import json
+import time
+from pathlib import Path
+from datetime import datetime
+import urllib.parse
+
+BASE_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = BASE_DIR / "scripts"
+OUTPUT_DIR = BASE_DIR / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# 必须排除的敏感/中间文件
+EXCLUDE_FILES = {
+    # devpn.py 的账号信息（含 token/钱包）
+    "last_account.json",
+    # ben_1.py 的原始全量配置（体积大且包含重复）
+    "all_nodes_full_configs.json",
+    "all_outbounds_merged.json",
+    # ben_1.py 的 Base64 输出（和 sub_b64 重复）
+    "subscription_base64.txt",
+    # ben_1.py 的中文名输出
+    "all_nodes_sharable_links.txt",
+    # Windows 环境下的输出
+    "all_nodes_full_configs (1).json",
+}
+
+# 各脚本期望的节点输出文件（用于日志报告）
+EXPECTED_NODE_FILES = {
+    "__.py": ["菜鸟.txt", "__.txt"],
+    "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
+    "Surfer.py": ["surfer.txt", "SF.txt"],
+    "ben_1.py": ["all_nodes_sharable_links.txt"],
+    "devpn.py": ["nodes.txt", "devpn.txt"],
+}
+
+
+def run_script(name, extra_env=None):
+    """运行单个提取脚本。失败不影响其他脚本。"""
+    script_path = SCRIPTS_DIR / name
+    if not script_path.exists():
+        print(f"[SKIP] {name} 不存在")
+        return None
+
+    print(f"\n{'='*60}")
+    print(f"[*] 运行 {name}")
+    print(f"{'='*60}")
+
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    # ben_1.py 的开头可能有 Termux 提示，这里确保非交互
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(SCRIPTS_DIR),
+            timeout=1200,  # 单脚本上限 20 分钟
+        )
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if stdout:
+            print(stdout[-4000:])
+
+        if result.returncode != 0:
+            print(f"[WARN] {name} 退出码 {result.returncode}")
+            if stderr:
+                print(f"[STDERR] {stderr[:1000]}")
+            return False
+        else:
+            print(f"[OK] {name} 完成")
+            return True
+
+    except subprocess.TimeoutExpired:
+        print(f"[TIMEOUT] {name} 超过 1200 秒，已终止")
+        return False
+    except Exception as e:
+        print(f"[ERROR] {name}: {e}")
+        return False
+
+
+def collect_outputs():
+    """收集 scripts/ 和 OUTPUT_DIR 下的节点链接文件，自动排除敏感中间文件。"""
+    candidates = []
+
+    # 递归搜索 scripts/
+    for root, dirs, files in os.walk(str(SCRIPTS_DIR)):
+        for f in files:
+            fp = Path(root) / f
+            if f in EXCLUDE_FILES:
+                continue
+            if f.endswith((".txt", ".json", ".log")):
+                candidates.append(fp)
+
+    # 也收集 OUTPUT_DIR（仅供向上兼容）
+    for f in OUTPUT_DIR.iterdir():
+        if f.is_file() and f.name not in EXCLUDE_FILES:
+            candidates.append(f)
+
+    unique = sorted(set(candidates))
+
+    print(f"[*] 收集到 {len(unique)} 个输出文件:")
+    for u in unique:
+        try:
+            size = u.stat().st_size
+        except Exception:
+            size = -1
+        print(f"    - {u.relative_to(SCRIPTS_DIR)} ({size} bytes)")
+
+    return unique
+
+
+def is_node_line(line: str) -> bool:
+    line = line.strip()
+    if not line or line.startswith("#") or line.startswith("//"):
+        return False
+    return line.startswith(("vless://", "vmess://", "trojan://", "ss://", "ssr://"))
+
+
+def extract_links(path: Path):
+    """从单个文件中提取有效节点链接。"""
+    links = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            line = line.strip()
+            if is_node_line(line):
+                # 对 ben_1.py 的 JSON outbounds 做兜底处理
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        ob = json.loads(line)
+                        if ob.get("type") in ("vless", "shadowsocks"):
+                            # 这里无法直接生成链接，跳过 JSON 对象行
+                            continue
+                    except Exception:
+                        pass
+                links.append(line)
+    except Exception as e:
+        print(f"[WARN] 读取 {path} 失败: {e}")
+    return links
+
+
+def merge_all(file_list):
+    """
+    合并去重。
+    去重键：取 # 之前 + 查询参数标准化（忽略顺序差异）
+    """
+    seen = set()
+    merged = []
+
+    for fpath in file_list:
+        links = extract_links(fpath)
+        for link in links:
+            try:
+                # 分离 fragment
+                if "#" in link:
+                    base, frag = link.split("#", 1)
+                    # 对 fragment 做 URL decode，避免同一节点不同编码被判定为不同
+                    frag = urllib.parse.unquote(frag)
+                else:
+                    base = link
+                    frag = ""
+
+                # 对 query 参数排序，消除顺序差异导致无法去重
+                if "?" in base:
+                    proto_and_rest, query = base.split("?", 1)
+                    params = urllib.parse.parse_qsl(query, keep_blank_values=True)
+                    params.sort(key=lambda x: x[0])
+                    query_sorted = urllib.parse.urlencode(params)
+                    key = f"{proto_and_rest}?{query_sorted}"
+                else:
+                    key = base
+
+                key = key.strip()
+                if not key:
+                    continue
+
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(link)
+            except Exception as e:
+                # 解析异常时保守处理：整行作为 key
+                if link and link not in seen:
+                    seen.add(link)
+                    merged.append(link)
+
+    return merged
+
+
+def count_by_type(links):
+    stats = {}
+    for l in links:
+        if l.startswith("vless://"):
+            t = "VLESS"
+        elif l.startswith("vmess://"):
+            t = "VMESS"
+        elif l.startswith("trojan://"):
+            t = "TROJAN"
+        elif l.startswith("ss://"):
+            t = "SS"
+        else:
+            t = "OTHER"
+        stats[t] = stats.get(t, 0) + 1
+    return stats
+
+
+def main():
+    print("=" * 60)
+    print("VPN 节点聚合器")
+    print(f"开始时间: {datetime.now().isoformat()}")
+    print(f"工作目录: {BASE_DIR}")
+    print("=" * 60)
+
+    # 环境变量注入
+    env = {}
+    ben_token = os.environ.get("BEN_TOKEN", "").strip()
+    if ben_token:
+        env["BEN_TOKEN"] = ben_token
+        print("[*] 已注入 BEN_TOKEN")
+    else:
+        print("[*] 未设置 BEN_TOKEN，跳过 ben_1.py")
+
+    # 依次运行提取脚本
+    # 注意：顺序不影响最终结果，但失败会继续下一个
+    results = {}
+    results["__.py"] = run_script("__.py")
+    results["TF__.py"] = run_script("TF__.py")
+    results["Surfer.py"] = run_script("Surfer.py")
+    results["ben_1.py"] = run_script("ben_1.py", extra_env=env) if ben_token else None
+    results["devpn.py"] = run_script("devpn.py")
+
+    # 收集输出文件
+    files = collect_outputs()
+    if not files:
+        print("[!] 没有收集到任何输出文件")
+        sys.exit(1)
+
+    # 合并去重
+    merged = merge_all(files)
+    print(f"\n[*] 合并去重后共 {len(merged)} 个节点")
+
+    # 统计
+    stats = count_by_type(merged)
+    print(f"[*] 类型统计: {stats}")
+
+    # 写出纯文本订阅
+    sub_txt = OUTPUT_DIR / "sub.txt"
+    sub_txt.write_text("\n".join(merged) + "\n", encoding="utf-8")
+    print(f"[+] 纯文本订阅: {sub_txt}")
+
+    # 写出 Base64 订阅
+    b64_content = base64.b64encode(
+        "\n".join(merged).encode("utf-8")
+    ).decode("ascii")
+
+    sub_b64 = OUTPUT_DIR / "sub_b64.txt"
+    sub_b64.write_text(b64_content, encoding="utf-8")
+    print(f"[+] Base64 订阅: {sub_b64} (长度 {len(b64_content)})")
+
+    # 写出统计报告
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "total_nodes": len(merged),
+        "by_type": stats,
+        "source_files": [str(p.relative_to(BASE_DIR)) for p in files],
+        "results": {k: ("skip" if v is None else ("ok" if v else "fail")) for k, v in results.items()},
+        "ben_token_set": bool(ben_token),
+    }
+    report_path = OUTPUT_DIR / "report.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[+] 运行报告: {report_path}")
+
+    print("=" * 60)
+    print("聚合完成")
+    print(f"订阅链接: {sub_b64}")
+    print(f"结束时间: {datetime.now().isoformat()}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

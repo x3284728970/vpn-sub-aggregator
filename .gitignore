@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output（由 CI 生成，无需提交）
+output/
+
+# 脚本运行时的中间文件
+*.log
+last_account.json
+all_nodes_full_configs.json
+all_outbounds_merged.json
+subscription_base64.txt
