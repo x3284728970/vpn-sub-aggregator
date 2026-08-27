@@ -39,7 +39,6 @@
 │   ├── __.py        # 菜鸟
 │   ├── TF__.py      # 银狐 / foxlink
 │   ├── Surfer.py    # 冲浪者
-│   ├── ben_1.py     # BEN VPN
 │   └── devpn.py     # DeVPN
 ├── aggregate.py     # 聚合主脚本
 ├── requirements.txt

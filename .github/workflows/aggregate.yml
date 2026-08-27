@@ -8,11 +8,6 @@ on:
   schedule:
     - cron: "0 0 */2 * *"
   workflow_dispatch:
-    inputs:
-      ben_token:
-        description: "手动覆盖 BEN_TOKEN（留空则使用 Secrets）"
-        required: false
-        type: string
 
 jobs:
   aggregate:

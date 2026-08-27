@@ -40,7 +40,7 @@ EXPECTED_NODE_FILES = {
     "__.py": ["菜鸟.txt", "__.txt"],
     "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
-    "ben_1.py": ["all_nodes_sharable_links.txt"],
+    # ben_1.py 已移除（Token 失效）
     "devpn.py": ["nodes.txt", "devpn.txt"],
 }
 
@@ -316,14 +316,14 @@ def main():
     print(f"工作目录: {BASE_DIR}")
     print("=" * 60)
 
-    # ben_1.py 的 Token 已内置到脚本中，无需外部注入
+    # 依次运行提取脚本
 
     # 依次运行提取脚本
     results = {}
     results["__.py"] = run_script("__.py")
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    results["ben_1.py"] = run_script("ben_1.py")
+    # ben_1.py 已移除（Token 失效）
     results["devpn.py"] = run_script("devpn.py")
 
     # 收集输出文件
