@@ -39,6 +39,10 @@
 │   ├── __.py        # 菜鸟
 │   ├── TF__.py      # 银狐 / foxlink
 │   ├── Surfer.py    # 冲浪者
+│   ├── fengniao.py  # 蜂鸟加速器
+│   ├── sulian.py    # 速连 VPN
+│   ├── zytvpn.py    # 纵云梯
+│   ├── butterflyds.py # ButterflyDS
 │   └── devpn.py     # DeVPN
 ├── aggregate.py     # 聚合主脚本
 ├── requirements.txt

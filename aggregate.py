@@ -40,8 +40,11 @@ EXPECTED_NODE_FILES = {
     "__.py": ["菜鸟.txt", "__.txt"],
     "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
-    # ben_1.py 已移除（Token 失效）
     "devpn.py": ["nodes.txt", "devpn.txt"],
+    "fengniao.py": ["fengniao.txt", "蜂鸟.txt"],
+    "sulian.py": ["sulian.txt", "速连.txt"],
+    "zytvpn.py": ["zytvpn.txt", "纵云梯.txt"],
+    "butterflyds.py": ["bfd_nodes.txt", "butterflyds.txt"],
 }
 
 # ================================================================
@@ -323,7 +326,10 @@ def main():
     results["__.py"] = run_script("__.py")
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    # ben_1.py 已移除（Token 失效）
+    results["fengniao.py"] = run_script("fengniao.py")
+    results["sulian.py"] = run_script("sulian.py")
+    results["zytvpn.py"] = run_script("zytvpn.py")
+    results["butterflyds.py"] = run_script("butterflyds.py")
     results["devpn.py"] = run_script("devpn.py")
 
     # 收集输出文件
