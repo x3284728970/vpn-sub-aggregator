@@ -36,7 +36,6 @@ jobs:
 
       - name: Aggregate nodes & upload to Gist
         env:
-          BEN_TOKEN: ${{ inputs.ben_token || secrets.BEN_TOKEN }}
           MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
           python aggregate.py

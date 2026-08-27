@@ -316,21 +316,14 @@ def main():
     print(f"工作目录: {BASE_DIR}")
     print("=" * 60)
 
-    # 环境变量注入
-    env = {}
-    ben_token = os.environ.get("BEN_TOKEN", "").strip()
-    if ben_token:
-        env["BEN_TOKEN"] = ben_token
-        print("[*] 已注入 BEN_TOKEN")
-    else:
-        print("[*] 未设置 BEN_TOKEN，跳过 ben_1.py")
+    # ben_1.py 的 Token 已内置到脚本中，无需外部注入
 
     # 依次运行提取脚本
     results = {}
     results["__.py"] = run_script("__.py")
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    results["ben_1.py"] = run_script("ben_1.py", extra_env=env) if ben_token else None
+    results["ben_1.py"] = run_script("ben_1.py")
     results["devpn.py"] = run_script("devpn.py")
 
     # 收集输出文件
@@ -375,7 +368,6 @@ def main():
         "by_type": stats,
         "source_files": [str(p.relative_to(BASE_DIR)) for p in files],
         "results": {k: ("skip" if v is None else ("ok" if v else "fail")) for k, v in results.items()},
-        "ben_token_set": bool(ben_token),
         "gist_raw_url": gist_raw_url,
     }
     report_path = OUTPUT_DIR / "report.json"

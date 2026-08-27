@@ -7,7 +7,7 @@ import urllib.parse
 import base64
 
 # ================= 配置区域 =================
-TOKEN = os.environ.get("BEN_TOKEN", "")  # 通过环境变量传入 Token
+TOKEN = "1fe45df7-aefd-4f4a-b880-e6c9cde96c6c"  # BEN 服务商 Token（内置）
 BASE_URL = "https://bebrina.date"
 LANG = "zh-CN"
 

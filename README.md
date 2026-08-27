@@ -21,7 +21,6 @@
 
 2. 仓库 **Settings → Secrets and variables → Actions** → 添加：
    - `MY_GITHUB_TOKEN` = 第 1 步的 PAT
-   - `BEN_TOKEN` = 你的 ben_1.py 服务商 Token（可选）
 
 3. **Actions → VPN Sub Aggregator → Run workflow**，跑完后查看日志，会输出类似：
    ```
