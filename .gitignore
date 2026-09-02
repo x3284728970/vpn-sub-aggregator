@@ -26,3 +26,9 @@ last_account.json
 all_nodes_full_configs.json
 all_outbounds_merged.json
 subscription_base64.txt
+
+# scripts/ 下的节点输出文件（由各脚本生成）
+scripts/*.txt
+scripts/*.json
+scripts/*.log
+scripts/*.account

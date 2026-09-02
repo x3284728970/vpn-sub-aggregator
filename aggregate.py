@@ -37,14 +37,12 @@ EXCLUDE_FILES = {
 
 # 各脚本期望的节点输出文件（用于日志报告）
 EXPECTED_NODE_FILES = {
-    "__.py": ["菜鸟.txt", "__.txt"],
     "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
     "devpn.py": ["nodes.txt", "devpn.txt"],
-    "fengniao.py": ["fengniao.txt", "蜂鸟.txt"],
-    "sulian.py": ["sulian.txt", "速连.txt"],
-    "zytvpn.py": ["zytvpn.txt", "纵云梯.txt"],
-    "butterflyds.py": ["bfd_nodes.txt", "butterflyds.txt"],
+    "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
+    # __.py 已注释（API 返回 0 节点）
+    # fengniao.py 已注释（服务端风控）
 }
 
 # ================================================================
@@ -323,13 +321,15 @@ def main():
 
     # 依次运行提取脚本
     results = {}
-    results["__.py"] = run_script("__.py")
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    results["fengniao.py"] = run_script("fengniao.py")
+    # __.py 已注释（API 返回 0 节点）
+    # results["__.py"] = run_script("__.py")
+    # fengniao.py 已注释（服务端风控，code:0 未发放 token）
+    # results["fengniao.py"] = run_script("fengniao.py")
     results["sulian.py"] = run_script("sulian.py")
-    results["zytvpn.py"] = run_script("zytvpn.py")
-    results["butterflyds.py"] = run_script("butterflyds.py")
+    # zytvpn.py 已删除（注册接口返回 error，无法修复）
+    # butterflyds.py 已删除（需要交互式输入，无法自动化）
     results["devpn.py"] = run_script("devpn.py")
 
     # 收集输出文件
