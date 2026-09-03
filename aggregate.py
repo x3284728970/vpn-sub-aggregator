@@ -41,6 +41,7 @@ EXPECTED_NODE_FILES = {
     "Surfer.py": ["surfer.txt", "SF.txt"],
     "devpn.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
+    "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
     # __.py 已注释（API 返回 0 节点）
     # fengniao.py 已注释（服务端风控）
 }
@@ -331,6 +332,7 @@ def main():
     # zytvpn.py 已删除（注册接口返回 error，无法修复）
     # butterflyds.py 已删除（需要交互式输入，无法自动化）
     results["devpn.py"] = run_script("devpn.py")
+    results["lanmao.py"] = run_script("lanmao.py")
 
     # 收集输出文件
     files = collect_outputs()
