@@ -42,7 +42,8 @@ EXPECTED_NODE_FILES = {
     "devpn.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
     "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
-    # __.py 已注释（API 返回 0 节点）
+    "hongdun.py": ["hongdun_nodes.txt"],
+    # __.py 已注释（登录成功但返回 0 节点，API 可能已变）
     # fengniao.py 已注释（服务端风控）
 }
 
@@ -324,7 +325,7 @@ def main():
     results = {}
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    # __.py 已注释（API 返回 0 节点）
+    # __.py 已注释（登录成功但返回 0 节点，API 可能已变）
     # results["__.py"] = run_script("__.py")
     # fengniao.py 已注释（服务端风控，code:0 未发放 token）
     # results["fengniao.py"] = run_script("fengniao.py")
@@ -333,6 +334,7 @@ def main():
     # butterflyds.py 已删除（需要交互式输入，无法自动化）
     results["devpn.py"] = run_script("devpn.py")
     results["lanmao.py"] = run_script("lanmao.py")
+    results["hongdun.py"] = run_script("hongdun.py")
 
     # 收集输出文件
     files = collect_outputs()

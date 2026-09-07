@@ -32,5 +32,4 @@ scripts/*.txt
 scripts/*.json
 scripts/*.log
 scripts/*.account
-scripts/蓝猫.txt
-scripts/蓝猫_sub_base64.txt
+scripts/hongdun_nodes.txt
