@@ -11,10 +11,10 @@ on:
         required: false
         default: "true"
         type: string
-      keep:
-        description: "保留的文件名（默认 jvhe.txt）"
+      targets:
+        description: "要作废的文件名，逗号分隔"
         required: false
-        default: "jvhe.txt"
+        default: "sub_b64.txt"
         type: string
 
 jobs:
@@ -37,5 +37,5 @@ jobs:
           MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
           python3 purge_old_sub.py \
-            --keep "${{ inputs.keep }}" \
+            --targets "${{ inputs.targets }}" \
             ${{ inputs.dry_run == 'true' && '--dry-run' || '' }}

@@ -28,8 +28,8 @@ import sys
 
 import requests
 
-# 要作废的文件名（默认：除了当前在用的 jvhe.txt，其它全作废）
-PURGE_TARGETS = ["sub_b64.txt", "sub.txt", "data.txt", "nodes.txt"]
+# 默认只作废这个（用户发出去的那个）
+DEFAULT_TARGETS = ["sub_b64.txt"]
 
 # 替换用的「死节点」——地址不可达，客户端解析得出但连不上
 DEAD_NODE = (
@@ -77,11 +77,17 @@ def list_all_gists(token):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="只打印，不修改")
+    ap.add_argument("--targets", default=None,
+                    help="要作废的文件名，逗号分隔（默认 sub_b64.txt）")
     ap.add_argument("--keep", action="append", default=[],
                     help="保留的文件名，可多次指定（默认保留 jvhe.txt）")
     ap.add_argument("--desc", default=None, help="只处理该 description 的 Gist")
     args = ap.parse_args()
 
+    if args.targets:
+        purge_targets = [x.strip() for x in args.targets.split(",") if x.strip()]
+    else:
+        purge_targets = ["sub_b64.txt"]   # 默认只作废这一个
     keep = set(args.keep) or {"jvhe.txt"}
 
     token = os.environ.get("MY_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
@@ -100,7 +106,7 @@ def main():
         if args.desc and desc != args.desc:
             continue
 
-        targets = [fn for fn in files if fn in PURGE_TARGETS and fn not in keep]
+        targets = [fn for fn in files if fn in purge_targets and fn not in keep]
         if not targets:
             continue
 
