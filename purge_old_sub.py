@@ -34,7 +34,7 @@ DEFAULT_TARGETS = ["sub_b64.txt"]
 # 替换用的「死节点」——地址不可达，客户端解析得出但连不上
 DEAD_NODE = (
     "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1"
-    "?encryption=none&security=none&type=tcp#expired"
+    "?encryption=none&security=none&type=tcp#%E6%8D%A2%E9%93%BE%E6%8E%A5%E4%BA%86"
 )
 DEAD_CONTENT_B64 = base64.b64encode(DEAD_NODE.encode()).decode()
 
