@@ -30,8 +30,12 @@ API_BASE = "https://api.go01.top/proxy"
 AES_IV = b"A-16-Byte-String"
 DEFAULT_DELAY = 1.5
 
-# 输出目录（用户指定）
-OUTPUT_DIR = "/storage/emulated/0/Download/PythonRunner/"
+# 输出目录（脚本所在目录，兼容 CI 与本地）
+try:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _SCRIPT_DIR = os.getcwd()
+OUTPUT_DIR = _SCRIPT_DIR + "/"
 # 固定文件名
 DATA_JSON = "蜂鸟数据.json"
 NODES_TXT = "蜂鸟节点.txt"

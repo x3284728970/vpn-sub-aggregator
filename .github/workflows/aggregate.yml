@@ -42,7 +42,7 @@ jobs:
           name: vpn-subscription
           path: |
             output/sub.txt
-            output/sub_b64.txt
+            output/jvhe.txt
             output/report.json
           retention-days: 90
           compression-level: 9

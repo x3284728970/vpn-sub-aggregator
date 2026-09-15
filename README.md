@@ -24,7 +24,7 @@
 
 3. **Actions → VPN Sub Aggregator → Run workflow**，跑完后查看日志，会输出类似：
    ```
-   [GIST] 创建成功，raw 链接: https://gist.githubusercontent.com/raw/xxx/sub_b64.txt
+   [GIST] 创建成功，raw 链接: https://gist.githubusercontent.com/raw/xxx/jvhe.txt
    ```
 
 4. 把那个 raw 链接粘贴到 Shadowrocket / Clash / V2RayN 等客户端即可
@@ -76,7 +76,7 @@ git push -u origin main
 ## 隐私与安全
 - 订阅放在 **私有 Gist**，知道 raw 链接的人才能访问
 - `aggregate.py` 会自动排除敏感中间文件（`last_account.json`、全量配置等）
-- `sub_b64.txt` 包含所有有效节点，泄露后可直接使用，**不要发公开聊天**
+- `jvhe.txt` 包含所有有效节点，泄露后可直接使用，**不要发公开聊天**
 - 建议 Gist 链接仅自己使用，不要分享
 
 ## 自定义

@@ -1,0 +1,41 @@
+name: Purge Old Subscription
+
+# 手动触发：作废旧订阅 Gist 文件（覆盖为死节点）
+# 用完可以把这个 workflow 删掉，或留着以后再用
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只预览不修改（true/false）"
+        required: false
+        default: "true"
+        type: string
+      keep:
+        description: "保留的文件名（默认 jvhe.txt）"
+        required: false
+        default: "jvhe.txt"
+        type: string
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Purge old subscription files
+        env:
+          MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+        run: |
+          python3 purge_old_sub.py \
+            --keep "${{ inputs.keep }}" \
+            ${{ inputs.dry_run == 'true' && '--dry-run' || '' }}

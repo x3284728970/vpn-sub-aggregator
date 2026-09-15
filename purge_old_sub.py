@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+作废旧订阅 Gist
+================
+场景：之前把 sub_b64.txt 的 raw 链接发给别人了，现在要让它失效。
+
+策略（可组合，默认全开）：
+  1. 把 sub_b64.txt 的内容替换成一个「死节点」，对方客户端下次更新后
+     所有可用节点被覆盖掉，只剩一条连不通的。
+  2. 同时把 sub.txt / jvhe.txt 等其它旧订阅文件也一并作废。
+
+注意：
+  - 不删 Gist！删了 raw 链接会 404，对方客户端更新失败会**继续用本地缓存的旧节点**。
+    覆盖成死节点才能让他真的用不了。
+  - GitHub raw 有 CDN 缓存，覆盖后几分钟内生效。
+  - 需要 token 具备 gist scope（classic PAT）。
+
+用法：
+  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py
+  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py --dry-run
+  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py --keep jvhe.txt
+"""
+
+import argparse
+import base64
+import os
+import sys
+
+import requests
+
+# 要作废的文件名（默认：除了当前在用的 jvhe.txt，其它全作废）
+PURGE_TARGETS = ["sub_b64.txt", "sub.txt", "data.txt", "nodes.txt"]
+
+# 替换用的「死节点」——地址不可达，客户端解析得出但连不上
+DEAD_NODE = (
+    "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1"
+    "?encryption=none&security=none&type=tcp#expired"
+)
+DEAD_CONTENT_B64 = base64.b64encode(DEAD_NODE.encode()).decode()
+
+API = "https://api.github.com"
+
+
+def headers(token):
+    return {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+
+def list_all_gists(token):
+    """分页拉取账号下所有 Gist。"""
+    out = []
+    page = 1
+    while True:
+        r = requests.get(
+            f"{API}/gists",
+            headers=headers(token),
+            params={"per_page": 100, "page": page},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            print(f"[!] 列出 Gist 失败: HTTP {r.status_code} {r.text[:200]}")
+            if r.status_code == 404:
+                print("    → 通常是 token 缺少 gist scope")
+            return out
+        batch = r.json()
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="只打印，不修改")
+    ap.add_argument("--keep", action="append", default=[],
+                    help="保留的文件名，可多次指定（默认保留 jvhe.txt）")
+    ap.add_argument("--desc", default=None, help="只处理该 description 的 Gist")
+    args = ap.parse_args()
+
+    keep = set(args.keep) or {"jvhe.txt"}
+
+    token = os.environ.get("MY_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        print("[!] 未设置 MY_GITHUB_TOKEN")
+        sys.exit(1)
+
+    gists = list_all_gists(token)
+    print(f"[*] 账号下共 {len(gists)} 个 Gist")
+
+    hit = 0
+    for g in gists:
+        gid = g["id"]
+        desc = g.get("description") or ""
+        files = g.get("files", {})
+        if args.desc and desc != args.desc:
+            continue
+
+        targets = [fn for fn in files if fn in PURGE_TARGETS and fn not in keep]
+        if not targets:
+            continue
+
+        hit += 1
+        print(f"\n[*] Gist {gid} | {desc} | public={g.get('public')}")
+        print(f"    文件: {list(files.keys())}")
+        print(f"    待作废: {targets}")
+
+        if args.dry_run:
+            continue
+
+        # 覆盖成死节点（保留文件名，raw 链接不变）
+        payload = {
+            "description": desc or "VPN 节点订阅",
+            "files": {fn: {"content": DEAD_CONTENT_B64} for fn in targets},
+        }
+        r = requests.patch(f"{API}/gists/{gid}", headers=headers(token), json=payload, timeout=30)
+        if r.status_code == 200:
+            for fn in targets:
+                print(f"    [OK] 已作废 {fn} -> https://gist.githubusercontent.com/raw/{gid}/{fn}")
+        else:
+            print(f"    [!] 失败: HTTP {r.status_code} {r.text[:200]}")
+
+    if hit == 0:
+        print("\n[!] 没找到需要作废的 Gist 文件")
+        print("    如果确定存在，检查 token 是否有 gist scope")
+    else:
+        print(f"\n[*] 处理完成，共 {hit} 个 Gist")
+        print("    raw 链接有 CDN 缓存，几分钟后生效；对方客户端下次更新即失效")
+
+
+if __name__ == "__main__":
+    main()

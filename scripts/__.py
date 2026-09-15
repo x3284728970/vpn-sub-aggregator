@@ -91,7 +91,7 @@ def make_request(api_base: str, endpoint: str, token: str) -> Optional[Dict]:
         "Host": host,
         "Accept": "*/*",
         "version": APP_VERSION,
-        "authtoken": FIXED_AUTHTOKEN,
+        "authtoken": token,      # 修复：authtoken 必须用登录返回的 token（原来用固定值会"您已掉线"）
         "Accept-Language": "zh-CN,zh-Hans;q=0.9",
         "Accept-Encoding": "gzip, deflate",
         "app": APP_TYPE,

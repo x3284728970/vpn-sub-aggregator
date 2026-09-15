@@ -33,18 +33,23 @@ EXCLUDE_FILES = {
     "subscription_base64.txt",
     "all_nodes_sharable_links.txt",
     "all_nodes_full_configs (1).json",
+    # 含凭据的中间文件，绝不能进订阅
+    "token.json",
+    ".fengniao_token_cache.json",
+    "蜂鸟数据.json",
+    "蓝猫_sub_base64.txt",
 }
 
 # 各脚本期望的节点输出文件（用于日志报告）
 EXPECTED_NODE_FILES = {
+    "__.py": ["菜鸟.txt"],
     "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
     "devpn.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
     "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
     "hongdun.py": ["hongdun_nodes.txt"],
-    # __.py 已注释（登录成功但返回 0 节点，API 可能已变）
-    # fengniao.py 已注释（服务端风控）
+    # fengniao.py 不加（用户自己单独用）
 }
 
 # ================================================================
@@ -52,7 +57,7 @@ EXPECTED_NODE_FILES = {
 # ================================================================
 
 GIST_DESC = "VPN 节点订阅（自动更新）"
-GIST_FILENAME = "sub_b64.txt"
+GIST_FILENAME = "jvhe.txt"
 
 
 def _github_token() -> str | None:
@@ -226,7 +231,11 @@ def collect_outputs():
             size = u.stat().st_size
         except Exception:
             size = -1
-        print(f"    - {u.relative_to(SCRIPTS_DIR)} ({size} bytes)")
+        try:
+            shown = u.relative_to(BASE_DIR)
+        except ValueError:
+            shown = u
+        print(f"    - {shown} ({size} bytes)")
     return unique
 
 
@@ -325,9 +334,8 @@ def main():
     results = {}
     results["TF__.py"] = run_script("TF__.py")
     results["Surfer.py"] = run_script("Surfer.py")
-    # __.py 已注释（登录成功但返回 0 节点，API 可能已变）
-    # results["__.py"] = run_script("__.py")
-    # fengniao.py 已注释（服务端风控，code:0 未发放 token）
+    results["__.py"] = run_script("__.py")
+    # fengniao.py 不加（用户自己单独用）
     # results["fengniao.py"] = run_script("fengniao.py")
     results["sulian.py"] = run_script("sulian.py")
     # zytvpn.py 已删除（注册接口返回 error，无法修复）
@@ -360,7 +368,7 @@ def main():
         "\n".join(merged).encode("utf-8")
     ).decode("ascii")
 
-    sub_b64 = OUTPUT_DIR / "sub_b64.txt"
+    sub_b64 = OUTPUT_DIR / "jvhe.txt"
     sub_b64.write_text(b64_content, encoding="utf-8")
     print(f"[+] Base64 订阅: {sub_b64} (长度 {len(b64_content)})")
 
