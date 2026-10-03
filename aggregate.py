@@ -54,7 +54,6 @@ EXPECTED_NODE_FILES = {
     "devpn.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
     "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
-    "hongdun.py": ["hongdun_nodes.txt"],
     "ipow.py": ["iPoW.txt"],
     # fengniao.py 不加（用户自己单独用）
 }
@@ -270,20 +269,11 @@ def extract_links(path: Path):
 def merge_all(file_list):
     """合并去重。对 query 参数排序，消除顺序差异导致无法去重。
 
-    返回 (链接, 来源文件名, 该端点在各来源里用过的所有名字) 序列。
+    返回 (链接, 来源文件名) 序列，来源文件名用来决定节点名前缀。
     节点名不参与去重键，所以重命名不会影响去重结果。
     """
     seen = set()
-    order = []
-    names_by_key = {}
-
-    def record(key, link, source):
-        if key not in seen:
-            seen.add(key)
-            order.append(key)
-            names_by_key[key] = [(link, source)]
-        else:
-            names_by_key[key].append((link, source))
+    merged = []
 
     for fpath in file_list:
         for link in extract_links(fpath):
@@ -299,17 +289,14 @@ def merge_all(file_list):
                 key = key.strip()
                 if not key:
                     continue
-                record(key, link, fpath.name)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append((link, fpath.name))
             except Exception:
-                if link:
-                    record(link, link, fpath.name)
+                if link and link not in seen:
+                    seen.add(link)
+                    merged.append((link, fpath.name))
 
-    merged = []
-    for key in order:
-        entries = names_by_key[key]
-        link, source = entries[0]
-        alt = [naming.current_name(l) for l, _s in entries[1:]]
-        merged.append((link, source, alt))
     return merged
 
 
@@ -356,7 +343,6 @@ def main():
     # butterflyds.py 已删除（需要交互式输入，无法自动化）
     results["devpn.py"] = run_script("devpn.py")
     results["lanmao.py"] = run_script("lanmao.py")
-    results["hongdun.py"] = run_script("hongdun.py")
     # ipow.py：限流是出口 IP 级滑动窗口，等待上限压到 420 秒，避免顶满 20 分钟总超时
     results["ipow.py"] = run_script("ipow.py", args=["--quiet", "--max-wait", "420"])
 
@@ -374,8 +360,8 @@ def main():
     merged = naming.apply(pairs)
 
     per_source = {}
-    for pair in pairs:
-        tag = naming.FILE_TAGS.get(pair[1], pair[1])
+    for _link, src in pairs:
+        tag = naming.FILE_TAGS.get(src, src)
         per_source[tag] = per_source.get(tag, 0) + 1
 
     print("[*] 来源统计（重命名后的节点名前缀）:")

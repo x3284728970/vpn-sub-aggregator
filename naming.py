@@ -34,7 +34,6 @@ FILE_TAGS = {
     "sulian.txt": "速连", "速连.txt": "速连", "速连节点.txt": "速连",
     "nodes.txt": "DE", "devpn.txt": "DE",
     "蓝猫.txt": "蓝猫",
-    "hongdun_nodes.txt": "红盾",
     "iPoW.txt": "iPoW",
     "蜂鸟.txt": "蜂鸟",
 }
@@ -47,7 +46,6 @@ SOURCE_TAGS = {
     "sulian.py": "速连",
     "devpn.py": "DE",
     "lanmao.py": "蓝猫",
-    "hongdun.py": "红盾",
     "ipow.py": "iPoW",
     "fengniao.py": "蜂鸟",
 }
@@ -234,54 +232,43 @@ def with_name(link, name):
     return base + "#" + urllib.parse.quote(name, safe="")
 
 
-def build_name(source_tag, region, originals):
+def build_name(source_tag, region, original):
     base = "{}{}".format(source_tag, region)
     for tag in KEEP_TAGS:
-        if tag and any(tag in (o or "") for o in originals):
+        if tag and tag in (original or ""):
             base += tag
             break
     return base
 
 
 def apply(pairs):
-    """pairs 是 (链接, 来源文件名[, 同名端点的所有原始名字]) 序列。
+    """pairs 是 (链接, 来源文件名) 序列，返回重命名并排好序的链接列表。
 
-    返回重命名并排好序的链接列表。名字全局唯一：同一 (来源, 地区, 档位)
-    的第二个节点起追加 -2、-3。
-
-    同一个端点常被多个来源同时收录，去重后只留先收集到的那条。此时把各来源
-    给这个端点起过的名字都拿来做地区识别，避免先到的那个名字信息不全
-    （例如先到的名字是「SF未知」，但另一来源叫它「香港中转」）。
+    名字全局唯一：同一 (来源, 地区, 档位) 的第二个节点起追加序号，如 `DE香港2`。
+    识别不出地区的就保持「未知」，不猜、也不拿别的来源起的名字来顶。
     """
     used = {}
     named = []
 
-    for item in pairs:
-        link, source_file = item[0], item[1]
-        alt_names = item[2] if len(item) > 2 else None
-
+    for link, source_file in pairs:
         tag = FILE_TAGS.get(source_file)
         if not tag:
-            named.append(link)
+            named.append(((source_file, 0, link), link))
             continue
 
-        primary = current_name(link)
-        if primary is None:
-            named.append(link)
+        original = current_name(link)
+        if original is None:
+            named.append(((source_file, 0, link), link))
             continue
 
-        candidates = [primary] + [n for n in (alt_names or []) if n and n != primary]
-        region = UNKNOWN_REGION
-        for cand in candidates:
-            region = detect_region(cand)
-            if region != UNKNOWN_REGION:
-                break
-
-        base = build_name(tag, region, candidates)
+        region = detect_region(original)
+        base = build_name(tag, region, original)
         seq = used.get(base, 0) + 1
         used[base] = seq
-        name = base if seq == 1 else "{}-{}".format(base, seq)
-        named.append(with_name(link, name))
+        name = base if seq == 1 else "{}{}".format(base, seq)
+        # 排序键带上序号，否则字典序会把「DE日本10」排到「DE日本2」前面
+        named.append(((base, seq, ""), with_name(link, name)))
 
-    # 按名字排序：同一来源的节点挨在一起，组内按地区
-    return sorted(named, key=lambda l: current_name(l) or l)
+    # 按名字排序：同一来源的节点挨在一起，组内按地区、地区内按序号
+    named.sort(key=lambda item: item[0])
+    return [link for _key, link in named]
