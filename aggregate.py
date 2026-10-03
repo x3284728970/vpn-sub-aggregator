@@ -38,6 +38,10 @@ EXCLUDE_FILES = {
     ".fengniao_token_cache.json",
     "蜂鸟数据.json",
     "蓝猫_sub_base64.txt",
+    # iPoW 的中间文件（钱包记录与不可用缓存，属于运行痕迹，不是订阅）
+    "iPoW_wallets.json",
+    "iPoW_unusable.json",
+    "iPoW_nodes.json",
 }
 
 # 各脚本期望的节点输出文件（用于日志报告）
@@ -49,6 +53,7 @@ EXPECTED_NODE_FILES = {
     "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
     "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
     "hongdun.py": ["hongdun_nodes.txt"],
+    "ipow.py": ["iPoW.txt"],
     # fengniao.py 不加（用户自己单独用）
 }
 
@@ -158,7 +163,7 @@ def upload_to_gist(content: str) -> str | None:
 # ================================================================
 
 
-def run_script(name, extra_env=None):
+def run_script(name, extra_env=None, args=None):
     """运行单个提取脚本。失败不影响其他脚本。"""
     script_path = SCRIPTS_DIR / name
     if not script_path.exists():
@@ -174,9 +179,10 @@ def run_script(name, extra_env=None):
         env.update(extra_env)
     env.setdefault("PYTHONUNBUFFERED", "1")
 
+    cmd = [sys.executable, str(script_path)] + list(args or [])
     try:
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            cmd,
             capture_output=True,
             text=True,
             env=env,
@@ -343,6 +349,8 @@ def main():
     results["devpn.py"] = run_script("devpn.py")
     results["lanmao.py"] = run_script("lanmao.py")
     results["hongdun.py"] = run_script("hongdun.py")
+    # ipow.py：限流是出口 IP 级滑动窗口，等待上限压到 420 秒，避免顶满 20 分钟总超时
+    results["ipow.py"] = run_script("ipow.py", args=["--quiet", "--max-wait", "420"])
 
     # 收集输出文件
     files = collect_outputs()
