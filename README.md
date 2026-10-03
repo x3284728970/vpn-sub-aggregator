@@ -157,8 +157,23 @@ IPOW_PROXY="1.2.3.4:8080,5.6.7.8:1080" python3 ipow.py   # 环境变量（CI 用
 | `IPOW_PROXY_URL` | 代理池接口，返回按行或逗号分隔的出口列表 |
 | `IPOW_BASE_URL` | 自建中转地址，例如 Cloudflare Worker |
 
-**另一种等价做法**：把 `--base-url` 指向自建中转（如一个 Cloudflare Worker），
-请求从那边出去，出口 IP 直接换掉，连代理池都不用。实测经中转注册能立刻拿到试用与完整配额。
+**另一种做法（当前已部署）**：把 `--base-url` 指向一个 Cloudflare Worker 中转，
+请求从 Cloudflare 的出口出去，出口 IP 直接换掉，连代理池都不用。
+实测经中转注册能立刻拿到 `status=active / plan=trial` 与完整配额。
+
+```
+--base-url https://<worker>.<子域>.workers.dev/r/<令牌>/ipow
+```
+
+Worker 源码在 `cf_relay.mjs`（**不在本仓库**，避免把令牌提交进去）。
+它带令牌鉴权：没有令牌、令牌不对、或者路径不对，一律 404 ——
+避免变成一个谁都能白用的公开中转，把 Cloudflare 额度耗光。
+
+用量上可以放心：免费额度是 **10 万次请求/天**，而一次聚合跑下来 iPoW 这部分
+也就几十次请求，两天跑一次，一个月约 750 次。
+
+**默认不开**，直接连。如果哪天 CI 里 iPoW 总是拿不到节点（出口被风控），
+把 `IPOW_BASE_URL` 这个 Secret 填上上面那串地址就切过去了。
 
 ### 关于免费代理池的实测结论
 
