@@ -341,8 +341,9 @@ def main():
     results["sulian.py"] = run_script("sulian.py")
     # zytvpn.py 已删除（注册接口返回 error，无法修复）
     # butterflyds.py 已删除（需要交互式输入，无法自动化）
-    results["devpn.py"] = run_script("devpn.py")
-    results["lanmao.py"] = run_script("lanmao.py")
+    # devpn.py / lanmao.py 已迁到提取面板自己跑（KataBump 容器），这里不再聚合
+    # results["devpn.py"] = run_script("devpn.py")
+    # results["lanmao.py"] = run_script("lanmao.py")
     # ipow.py：限流是出口 IP 级滑动窗口，等待上限压到 420 秒，避免顶满 20 分钟总超时
     results["ipow.py"] = run_script("ipow.py", args=["--quiet", "--max-wait", "420"])
 
