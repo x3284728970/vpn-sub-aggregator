@@ -4,19 +4,49 @@
 
 ## 节点命名
 
-所有来源的节点统一命名为 `<源标识>-<地区>-<序号>`，在客户端里一眼能看出这条线路来自哪个 VPN、落地在哪个地区：
+各来源脚本原来各写各的名字，风格完全不统一：
 
 ```
-iPoW-日本-01      iPoW-香港-02      iPoW-美国-05
+__.py        🇭🇰香港专线01+下载专用
+lanmao.py    🇯🇵日本专线-01 专线优化
+Surfer.py    SF香港
+TF__.py      HK-香港 / HK-香港-Gold
+sulian.py    日本东京(YouTube,ChatGPT等)
+devpn.py     DeVPN-HK-0
+ipow.py      iPoW-日本-01
 ```
 
-| 源标识 | 来源脚本 | 说明 |
-|--------|----------|------|
-| `iPoW` | `ipow.py` | iPoW.ai，按地区统一重命名 |
-| `SF` | `Surfer.py` | 冲浪者，按地区统一重命名 |
-| 其余 | 其它脚本 | 沿用各来源自身命名的地区/城市信息 |
+`naming.py` 在聚合时统一重写成 **`VPN名+地区`**：
 
-`iPoW` 的序号按地区分组、组内按节点 ID 排序，重新跑一遍编号保持稳定。
+```
+菜鸟香港   蓝猫日本   SF香港   银狐香港   银狐香港Gold
+速连日本   DE香港     iPoW香港   iPoW香港-2
+```
+
+| 前缀 | 来源脚本 | 产出文件 |
+|------|----------|----------|
+| `菜鸟` | `__.py` | `菜鸟.txt` |
+| `银狐` | `TF__.py` | `银狐.txt` |
+| `SF` | `Surfer.py` | `surfer.txt` |
+| `速连` | `sulian.py` | `速连节点.txt` |
+| `DE` | `devpn.py` | `nodes.txt` |
+| `蓝猫` | `lanmao.py` | `蓝猫.txt` |
+| `红盾` | `hongdun.py` | `hongdun_nodes.txt` |
+| `iPoW` | `ipow.py` | `iPoW.txt` |
+
+规则细节：
+
+- **地区识别**按 中文关键词 → 旗帜 emoji → 国家代码 → 城市名 的顺序。中文关键词优先，
+  因为实测部分厂商把所有节点都挂上 `🇨🇳` 前缀（如「🇨🇳台湾专线01」），此时文案里的
+  「台湾」才是真实落地，旗帜只是装饰。
+- **重名**：同一 VPN 同一地区的第二个节点起追加 `-2`、`-3`。客户端与 Clash 都要求
+  代理名唯一，不这么做 Clash 会直接报错。
+- **档位**：来源自己标注了档位的保留后缀，如银狐的 `银狐香港Gold`，避免把两档线路静默合并。
+- **自动/负载均衡入口**没有固定地区，命名为 `速连自动`。
+- 同一个端点常被多个来源同时收录，去重后只留先收集到的那条。此时会把各来源给这个
+  端点起过的名字**都**拿来做地区识别，避免先到的名字信息不全（实测有条节点先到的名字是
+  `SF未知`，靠另一来源的「马来西亚直连」补回了 `SF马来西亚`）。
+- 改前缀或增删来源：编辑 `naming.py` 的 `FILE_TAGS`。
 
 ## 订阅方式（二选一）
 
@@ -54,13 +84,14 @@ iPoW-日本-01      iPoW-香港-02      iPoW-美国-05
 ├── scripts/
 │   ├── __.py          # 菜鸟
 │   ├── TF__.py        # 银狐 / foxlink
-│   ├── Surfer.py      # 冲浪者（节点名 SF+地区）
+│   ├── Surfer.py      # 冲浪者
 │   ├── sulian.py      # 速连 VPN
 │   ├── devpn.py       # DeVPN
 │   ├── lanmao.py      # 蓝猫 VPN
-│   ├── hongdun.py     # 红盾 VPN
-│   ├── ipow.py        # iPoW.ai（并发优化版，节点名 iPoW+地区）
+│   ├── hongdun.py     # 红盾 VPN（接口已不下发节点，实际产出 0 个）
+│   ├── ipow.py        # iPoW.ai（并发优化版）
 │   └── fengniao.py    # 蜂鸟加速器（未接入聚合，单独运行）
+├── naming.py          # 统一节点命名：VPN名+地区
 ├── aggregate.py       # 聚合主脚本
 ├── purge_old_sub.py   # 旧订阅作废脚本
 ├── requirements.txt
@@ -112,7 +143,11 @@ iPoW-日本-01      iPoW-香港-02      iPoW-美国-05
 | 网络异常/5xx | 一次性永久拉黑节点 | 退避重试，只有业务拒绝才拉黑 |
 | `--wallets N` | 实际会用 N+1 个 | 修正 |
 | 钱包记录 | 每次运行整份覆盖 | 按地址合并 |
-| 节点名 | `iPoW-ZA-gcp-africa-south1-za-1` | `iPoW-南非-01` |
+| 节点名 | `iPoW-ZA-gcp-africa-south1-za-1` | `iPoW南非` |
+
+> 红盾（`hongdun.py`）目前拿不到节点：`node.getNodeList` 只返回 `[{"recommend": 1}]`，
+> 不再下发真实节点数据，脚本拿到 1 个空节点、生成 0 条链接。留着不影响聚合，
+> 想干净些可以把 `aggregate.py` 里的 `run_script("hongdun.py")` 注释掉。
 
 ### 单独运行
 

@@ -20,6 +20,8 @@ try:
 except ImportError:
     requests = None
 
+import naming
+
 BASE_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = BASE_DIR / "scripts"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -266,42 +268,48 @@ def extract_links(path: Path):
 
 
 def merge_all(file_list):
-    """合并去重。对 query 参数排序，消除顺序差异导致无法去重。"""
+    """合并去重。对 query 参数排序，消除顺序差异导致无法去重。
+
+    返回 (链接, 来源文件名, 该端点在各来源里用过的所有名字) 序列。
+    节点名不参与去重键，所以重命名不会影响去重结果。
+    """
     seen = set()
-    merged = []
+    order = []
+    names_by_key = {}
+
+    def record(key, link, source):
+        if key not in seen:
+            seen.add(key)
+            order.append(key)
+            names_by_key[key] = [(link, source)]
+        else:
+            names_by_key[key].append((link, source))
 
     for fpath in file_list:
-        links = extract_links(fpath)
-        for link in links:
+        for link in extract_links(fpath):
             try:
-                if "#" in link:
-                    base, frag = link.split("#", 1)
-                    frag = urllib.parse.unquote(frag)
-                else:
-                    base = link
-                    frag = ""
-
+                base = link.split("#", 1)[0] if "#" in link else link
                 if "?" in base:
                     proto_and_rest, query = base.split("?", 1)
                     params = urllib.parse.parse_qsl(query, keep_blank_values=True)
                     params.sort(key=lambda x: x[0])
-                    query_sorted = urllib.parse.urlencode(params)
-                    key = f"{proto_and_rest}?{query_sorted}"
+                    key = f"{proto_and_rest}?{urllib.parse.urlencode(params)}"
                 else:
                     key = base
-
                 key = key.strip()
                 if not key:
                     continue
+                record(key, link, fpath.name)
+            except Exception:
+                if link:
+                    record(link, link, fpath.name)
 
-                if key not in seen:
-                    seen.add(key)
-                    merged.append(link)
-            except Exception as e:
-                if link and link not in seen:
-                    seen.add(link)
-                    merged.append(link)
-
+    merged = []
+    for key in order:
+        entries = names_by_key[key]
+        link, source = entries[0]
+        alt = [naming.current_name(l) for l, _s in entries[1:]]
+        merged.append((link, source, alt))
     return merged
 
 
@@ -359,8 +367,22 @@ def main():
         sys.exit(1)
 
     # 合并去重
-    merged = merge_all(files)
-    print(f"\n[*] 合并去重后共 {len(merged)} 个节点")
+    pairs = merge_all(files)
+    print(f"\n[*] 合并去重后共 {len(pairs)} 个节点")
+
+    # 按「VPN名+地区」统一重命名
+    merged = naming.apply(pairs)
+
+    per_source = {}
+    for pair in pairs:
+        tag = naming.FILE_TAGS.get(pair[1], pair[1])
+        per_source[tag] = per_source.get(tag, 0) + 1
+
+    print("[*] 来源统计（重命名后的节点名前缀）:")
+    for tag in sorted(per_source, key=lambda t: (-per_source[t], t)):
+        print(f"    {tag:<10} {per_source[tag]} 个")
+    examples = [naming.current_name(l) for l in merged[:6]]
+    print("[*] 节点名示例: " + "，".join(e for e in examples if e))
 
     # 统计
     stats = count_by_type(merged)

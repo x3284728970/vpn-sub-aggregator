@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """iPoW.ai 节点提取（并发优化版 / 聚合订阅接入版）
 
-输出节点名字统一为 `<源标识>-<地区>-<序号>`，例如 `iPoW-日本-03`，
-方便在客户端里一眼看出这条节点来自哪个 VPN、落地在哪个地区。
+输出节点名字统一为 `<源标识><地区>`，例如 `iPoW日本`、`iPoW香港-2`，
+与聚合器里其它来源的命名规则一致，一眼能看出这条节点来自哪个 VPN、落地在哪个地区。
 
 【实测限流语义（重要）】
 - 限流是**出口 IP 级滑动窗口**，不是单纯的账号配额：窗口充足时单个账号能取 24 个节点，
@@ -661,15 +661,20 @@ def node_name(node):
 
 
 def assign_display_names(nodes, source_tag):
-    """按地区排序后统一编号，名字形如 `iPoW-日本-03`，并重建 vless 链接。"""
+    """按地区排序后统一命名，形如 `iPoW日本`，并重建 vless 链接。
+
+    同一地区有多个节点时第二个起追加 `-2`、`-3`（客户端和 Clash 都要求名字唯一）。
+    """
     ordered = sorted(nodes, key=lambda n: (region_label(n),
                                            n.get('node_id') or ''))
     counter = {}
     for n in ordered:
         region = region_label(n)
-        counter[region] = counter.get(region, 0) + 1
+        seq = counter.get(region, 0) + 1
+        counter[region] = seq
         n['region_cn'] = region
-        n['display_name'] = '{}-{}-{:02d}'.format(source_tag, region, counter[region])
+        n['display_name'] = ('{}{}'.format(source_tag, region) if seq == 1
+                             else '{}{}-{}'.format(source_tag, region, seq))
         n['vless_url'] = build_vless_url(n)
     return ordered
 
