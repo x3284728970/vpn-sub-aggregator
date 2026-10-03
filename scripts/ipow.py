@@ -14,18 +14,36 @@
   只会加速风控。脚本默认 `--on-429 wait` 就是基于这一点。
 - 窗口充足时按 24 次/钱包预切批，正常情况下一次跑完不会撞限流。
 
+【出口池（应对 IP 级限流）】
+既然限流是**出口 IP 级**的，换出口就是最直接的解法：一个钱包配一个干净出口，
+撞限流就换出口（同一个钱包继续，配额按出口 IP 计），出口被风控就直接换出口重来，
+不再把节点判死、也不再原地干等。
+
+    python ipow.py --proxy http://1.2.3.4:8080 --proxy socks5://5.6.7.8:1080
+    python ipow.py --proxy-file exits.txt          # 一行一个
+    python ipow.py --proxy-url https://<池接口>/list  # 从代理池 API 拉
+    IPOW_PROXY="1.2.3.4:8080,5.6.7.8:1080" python ipow.py   # 环境变量（CI 用）
+
+出口默认会先探活：能真的取到节点目录才算可用，并按**出口 IP 去重**——
+两个代理走同一个出口就是同一个限流窗口，留着没用。死代理会被剔除。
+
+另一种等价做法：把 `--base-url` 指向自建中转（如 Cloudflare Worker），
+请求从那边出去，出口 IP 直接换掉。实测经中转注册能立刻拿到试用与完整配额。
+
 【相对原版的优化】
 1. 并发拉取：`--concurrency` 默认 6，24 个节点实测 1.5 秒（原版串行约 24 秒）。
-2. 限流处理改为「原地等窗口」（默认），不再像原版那样无脑换号 —— 原版在 IP 级限流下会把
+2. 限流处理改为「换出口 → 原地等窗口」（默认），不再像原版那样无脑换号 —— 原版在 IP 级限流下会把
    `--wallets` 额度全部烧成死账号，还拿不到几个节点。
-3. 注册后立即校验订阅状态，遇到风控停发试用就立刻收手，不继续注册加重封禁。
+3. 注册后立即校验订阅状态，遇到风控就换出口重试；出口池试完才收手，
+   不继续注册加重封禁。
 4. 不可用节点缓存（`iPoW_unusable.json`，默认 6 小时）：原版每次重跑都重新探测，
-   实测 47 个节点里有 7 个不可用，白烧 15% 的配额。
+   实测目录里约 15% 的节点不可用，白烧配额。
 5. 采纳服务端的 `route_failure_exclude_node_ids`，明说要排除的节点直接跳过，连配额都不花。
 6. 瞬态错误（网络异常/5xx）退避重试，不再像原版那样一次性永久拉黑。
 7. 修正 `--wallets` 的差一错误（原版 `--wallets 1` 实际会用掉 2 个钱包）。
 8. 钱包记录改为合并写入，不再每次覆盖。
 9. 地区中文名 + 源前缀重命名，并追加 `iPoW.txt`（纯链接）与 base64 订阅两种聚合器友好的产物。
+10. 出口池：支持 http/socks5、列表文件、代理池 API、环境变量，自动探活与按出口 IP 去重。
 
 用法示例：
     python ipow.py                          # 拉取全部节点到脚本目录
@@ -130,6 +148,20 @@ class QuotaExhausted(IpowError):
         super().__init__(
             '配额已耗尽 (402)' + ('：' + detail if detail else ''),
             code='quota_exhausted')
+
+
+class SubscriptionInactive(IpowError):
+    """402 subscription_inactive：服务端不给这个账号发订阅。
+
+    这是**出口 IP 被风控**的表现，不是账号问题 —— 重试、换钱包都没用，
+    只有换一个干净出口才有效。
+    """
+
+    def __init__(self, detail=''):
+        super().__init__(
+            '出口被风控，服务端未发放订阅 (402 subscription_inactive)'
+            + ('：' + detail if detail else ''),
+            code='subscription_inactive')
 
 class RateLimited(IpowError):
     def __init__(self, retry_after, detail=''):
@@ -483,13 +515,18 @@ class _RateLimiter:
 
 class IpowClient:
     def __init__(self, base=API_BASE, timeout=20, verbose=False,
-                 min_interval=0.15, retries=3):
+                 min_interval=0.15, retries=3, proxy=None):
         self.base = base.rstrip('/')
         self.timeout = timeout
         self.verbose = verbose
         self.retries = max(int(retries), 0)
         self.limiter = _RateLimiter(min_interval)
         self._local = threading.local()
+        self._slock = threading.Lock()
+        self._sessions = []
+        self._proxy = (proxy or '').strip() or None
+        # 每次换出口就把代号 +1，各线程会丢弃旧会话重新建连
+        self._generation = 0
         if not _HAS_REQUESTS:
             try:
                 self.ssl_ctx = ssl.create_default_context()
@@ -497,19 +534,54 @@ class IpowClient:
                 self.ssl_ctx = ssl._create_unverified_context()
 
     @property
+    def proxy(self):
+        return self._proxy
+
+    def set_proxy(self, proxy):
+        """换出口。旧会话全部作废，下一次请求会重新建连走新出口。"""
+        new = (proxy or '').strip() or None
+        if new == self._proxy:
+            return
+        self._proxy = new
+        self._generation += 1
+        with self._slock:
+            for sess in self._sessions:
+                try:
+                    sess.close()
+                except Exception:
+                    pass
+            self._sessions = []
+
+    def _new_session(self):
+        sess = requests.Session()
+        sess.headers.update({
+            'User-Agent': USER_AGENT,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        })
+        if self._proxy:
+            sess.proxies = {'http': self._proxy, 'https': self._proxy}
+        with self._slock:
+            self._sessions.append(sess)
+        return sess
+
+    @property
     def session(self):
-        """每个线程各自持有一个 requests.Session，避免连接池跨线程竞争。"""
+        """每个线程各自持有一个 requests.Session，避免连接池跨线程竞争。
+
+        换出口后代号会变，旧会话（连着旧出口）自动作废重建。
+        """
         if not _HAS_REQUESTS:
             return None
-        sess = getattr(self._local, 'session', None)
-        if sess is None:
-            sess = requests.Session()
-            sess.headers.update({
-                'User-Agent': USER_AGENT,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-            })
-            self._local.session = sess
+        sess, gen = getattr(self._local, 'session_pair', (None, -1))
+        if sess is None or gen != self._generation:
+            if sess is not None:
+                try:
+                    sess.close()
+                except Exception:
+                    pass
+            sess = self._new_session()
+            self._local.session_pair = (sess, self._generation)
         return sess
 
     def _request(self, method, path, body=None, token=None):
@@ -581,6 +653,13 @@ class IpowClient:
         if status_code == 401:
             raise IpowError('JWT 已失效 (401)')
         if status_code == 402:
+            code = None
+            try:
+                code = (json.loads(resp_text).get('error') or {}).get('code')
+            except Exception:
+                pass
+            if code == 'subscription_inactive':
+                raise SubscriptionInactive(resp_text[:160])
             raise QuotaExhausted(resp_text[:160])
         if status_code >= 500:
             raise TransientError('服务端 {} {}: {}'.format(
@@ -639,6 +718,139 @@ class IpowClient:
                              body, token=token)
 
 # ---------------------------------------------------------------------------
+# 出口池（代理轮换）
+# ---------------------------------------------------------------------------
+
+def parse_proxy(line):
+    """把一行代理文本归一成 requests 能用的 URL。支持 host:port 简写。"""
+    line = (line or '').strip()
+    if not line or line.startswith('#'):
+        return None
+    line = line.split()[0].split(',')[0].strip()
+    if not line or ':' not in line:
+        return None
+    if '://' not in line:
+        line = 'http://' + line
+    scheme = line.split('://', 1)[0].lower()
+    if scheme not in ('http', 'https', 'socks4', 'socks5', 'socks5h'):
+        return None
+    return line
+
+
+def load_proxies(proxies=None, files=None, urls=None, timeout=25):
+    """从命令行、文件、URL 三处收集出口，按出现顺序去重。"""
+    out = []
+
+    def add(raw):
+        for chunk in str(raw).replace(',', '\n').splitlines():
+            v = parse_proxy(chunk)
+            if v:
+                out.append(v)
+
+    for p in proxies or []:
+        add(p)
+    for path in files or []:
+        try:
+            with open(path, encoding='utf-8', errors='ignore') as f:
+                add(f.read())
+        except Exception as exc:
+            print('⚠️ 读取出口文件失败 {}: {}'.format(path, exc))
+    for url in urls or []:
+        try:
+            r = requests.get(url, timeout=timeout)
+            add(r.text)
+        except Exception as exc:
+            print('⚠️ 拉取出口列表失败 {}: {}'.format(url, exc))
+    return list(dict.fromkeys(out))
+
+
+class ProxyPool:
+    """出口池：一个钱包配一个出口，出口用坏了换下一个。"""
+
+    def __init__(self, proxies=None):
+        self._all = list(proxies or [])
+        self._dead = set()
+        self._idx = 0
+
+    def __len__(self):
+        return len(self._all)
+
+    @property
+    def alive(self):
+        return [p for p in self._all if p not in self._dead]
+
+    def take(self):
+        """轮转取下一个可用出口；池空（或全死）返回 None，表示直连。"""
+        n = len(self._all)
+        for _ in range(n):
+            p = self._all[self._idx % n]
+            self._idx += 1
+            if p not in self._dead:
+                return p
+        return None
+
+    def mark_dead(self, proxy):
+        if proxy:
+            self._dead.add(proxy)
+
+    def mark_alive(self, proxy):
+        self._dead.discard(proxy)
+
+
+def check_proxies(pool, base, concurrency=32, timeout=10, need_exit_ip=True):
+    """并发探活：能真的取到 iPoW 节点目录才算可用。
+
+    同时按出口 IP 去重 —— 同一个出口 IP 就是同一个限流窗口，留着没用。
+    """
+    import concurrent.futures as _cf
+
+    if not pool.alive:
+        return pool
+
+    def probe(p):
+        s = requests.Session()
+        s.headers.update({'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+        s.proxies = {'http': p, 'https': p}
+        exit_ip = None
+        try:
+            r = s.get('http://api.ipify.org/?format=json', timeout=timeout)
+            exit_ip = r.json().get('ip')
+        except Exception:
+            pass
+        try:
+            r = s.get(base + '/p2p-lite/v1/nodes?redacted=1', timeout=timeout)
+            ok = r.status_code == 200 and bool(r.json().get('nodes'))
+        except Exception:
+            ok = False
+        finally:
+            s.close()
+        return p, ok, exit_ip
+
+    good = []
+    with _cf.ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(pool.alive)))) as ex:
+        for p, ok, exit_ip in ex.map(probe, pool.alive):
+            if ok:
+                good.append((p, exit_ip))
+
+    if need_exit_ip:
+        seen_ip = set()
+        deduped = []
+        for p, ip in good:
+            if ip and ip in seen_ip:
+                continue
+            if ip:
+                seen_ip.add(ip)
+            deduped.append(p)
+        good = [(p, ip) for p, ip in good if p in deduped]
+
+    alive = {p for p, _ip in good}
+    for p in pool.alive:
+        if p not in alive:
+            pool.mark_dead(p)
+    return pool
+
+
+# ---------------------------------------------------------------------------
 # 解密与配置生成
 # ---------------------------------------------------------------------------
 
@@ -663,8 +875,7 @@ def node_name(node):
 def assign_display_names(nodes, source_tag):
     """按地区排序后统一命名，形如 `iPoW日本`，并重建 vless 链接。
 
-    同一地区有多个节点时第二个起直接跟序号，如 `iPoW日本2`
-    （客户端和 Clash 都要求名字唯一）。
+    同一地区有多个节点时第二个起追加 `-2`、`-3`（客户端和 Clash 都要求名字唯一）。
     """
     ordered = sorted(nodes, key=lambda n: (region_label(n),
                                            n.get('node_id') or ''))
@@ -923,6 +1134,9 @@ def _fetch_one(client, token, session_id, sub_token, device_id, item, stop):
     except RateLimited as exc:
         stop.set()
         return node_id, 'limited', exc.retry_after
+    except SubscriptionInactive:
+        stop.set()
+        return node_id, 'inactive', None
     except QuotaExhausted:
         stop.set()
         return node_id, 'quota', None
@@ -943,20 +1157,26 @@ def _fetch_one(client, token, session_id, sub_token, device_id, item, stop):
 
 
 def pull_with_wallet(client, state, session_id, device_id, args, batch):
-    """并法拉取一批节点。batch 已按剩余配额切好，正常情况下不会触发 429。"""
+    """并法拉取一批节点。batch 已按剩余配额切好，正常情况下不会触发 429。
+
+    返回 (nodes, limited, ok_ids, unusable, inactive)。
+    inactive=True 表示出口被风控（402 subscription_inactive），
+    此时不能把节点判死，要换出口重来。
+    """
     nodes = []
     unusable = set()
     ok_ids = []
     limited = None
+    inactive = False
     stop = threading.Event()
     token = state['jwt']
     sub_token = state.get('subscription_token')
 
     workers = max(1, min(args.concurrency, len(batch)))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            pool.submit(_fetch_one, client, token, session_id, sub_token,
-                        device_id, item, stop)
+            executor.submit(_fetch_one, client, token, session_id, sub_token,
+                            device_id, item, stop)
             for item in batch
         ]
         for fut in concurrent.futures.as_completed(futures):
@@ -968,8 +1188,10 @@ def pull_with_wallet(client, state, session_id, device_id, args, batch):
                     print('    ✔ {:<32} {}'.format(node_id, payload['server']))
             elif status == 'limited':
                 limited = payload
-                print('    ⚠ 触发 {} 限流（Retry-After={}s）'.format(
-                    '402' if payload is None else '429', payload))
+                print('    ⚠ 触发 429 限流（Retry-After={}s）'.format(payload))
+            elif status == 'inactive':
+                inactive = True
+                print('    ⚠ 出口被风控（402 subscription_inactive）')
             elif status == 'quota':
                 limited = 0
                 print('    ⚠ 触发 402 配额耗尽')
@@ -982,11 +1204,11 @@ def pull_with_wallet(client, state, session_id, device_id, args, batch):
                 if args.verbose:
                     print('    ✘ {:<32} 未命中 {}'.format(node_id, payload))
 
-    if limited is not None:
+    if limited is not None or inactive:
         skipped = len(batch) - len(ok_ids) - len(unusable)
         if skipped > 0:
-            print('    已中止本批剩余 {} 个请求，剩余节点留给下一个钱包'.format(skipped))
-    return nodes, limited, ok_ids, unusable
+            print('    已中止本批剩余 {} 个请求'.format(skipped))
+    return nodes, limited, ok_ids, unusable, inactive
 
 # ---------------------------------------------------------------------------
 # 合并去重
@@ -1074,8 +1296,28 @@ def main(argv=None):
                     help='网络异常/5xx 重试次数，默认 %(default)s')
     ap.add_argument('--timeout', type=float, default=20.0,
                     help='单请求超时（秒），默认 %(default)s')
-    ap.add_argument('--base-url', default=API_BASE,
-                    help='接口地址，默认 %(default)s')
+    ap.add_argument('--proxy', action='append',
+                    default=[s for s in
+                             os.environ.get('IPOW_PROXY', '').replace(',', '\n').splitlines()
+                             if s.strip()] or None,
+                    help='出口代理，可重复；支持 http/socks5，host:port 可省略协议。'
+                         '也可用环境变量 IPOW_PROXY（逗号分隔）')
+    ap.add_argument('--proxy-file', action='append',
+                    default=[os.environ['IPOW_PROXY_FILE']]
+                    if os.environ.get('IPOW_PROXY_FILE') else None,
+                    help='出口列表文件，一行一个。也可用环境变量 IPOW_PROXY_FILE')
+    ap.add_argument('--proxy-url', action='append',
+                    default=[os.environ['IPOW_PROXY_URL']]
+                    if os.environ.get('IPOW_PROXY_URL') else None,
+                    help='出口列表接口（如代理池 API），返回按行或逗号分隔的列表。'
+                         '也可用环境变量 IPOW_PROXY_URL')
+    ap.add_argument('--no-proxy-check', action='store_true',
+                    help='跳过出口探活（默认会先探活并按出口 IP 去重）')
+    ap.add_argument('--max-proxy-rotations', type=int, default=8,
+                    help='一轮运行内最多换几次出口，默认 %(default)s')
+    ap.add_argument('--base-url', default=os.environ.get('IPOW_BASE_URL') or API_BASE,
+                    help='接口地址，默认 %(default)s（也可指向自建中转，直接换出口）。'
+                         '可用环境变量 IPOW_BASE_URL')
     ap.add_argument('-o', '--out-dir', default=BASE_DIR,
                     help='输出目录，默认脚本所在目录 %(default)s')
     ap.add_argument('--android-out', action='store_true',
@@ -1118,6 +1360,20 @@ def main(argv=None):
     client = IpowClient(base=args.base_url, timeout=args.timeout,
                         verbose=args.verbose, min_interval=args.interval,
                         retries=args.retries)
+
+    # 出口池：限流是按出口 IP 计的，一个钱包配一个干净出口
+    pool = ProxyPool(load_proxies(args.proxy, args.proxy_file, args.proxy_url))
+    if len(pool):
+        print('出口池: {} 个候选'.format(len(pool)))
+        if not args.no_proxy_check:
+            t0 = time.time()
+            check_proxies(pool, args.base_url, timeout=max(8.0, args.timeout / 2))
+            print('出口探活: 可用 {} 个（耗时 {:.0f}s）'.format(
+                len(pool.alive), time.time() - t0))
+        if not pool.alive:
+            print('⚠️ 出口池里没有一个可用，回退为直连')
+    current_proxy = None
+    rotations = 0
 
     unusable_path = os.path.join(out_dir, UNUSABLE_FILE)
     wallets_path = os.path.join(out_dir, WALLETS_FILE)
@@ -1167,25 +1423,56 @@ def main(argv=None):
             print('\n{}'.format('─' * 50))
             print('钱包 #{} | 待取 {} 个'.format(len(wallets_used) + 1, len(remaining)))
 
-            try:
-                state = register_new_wallet(client, verbose=args.verbose)
-            except IpowError as exc:
-                print('  ❌ 注册失败: {}'.format(exc))
-                break
+            # 注册。出口被风控（服务端不发试用）时换出口重试，而不是直接放弃
+            state = None
+            attempts = 0
+            max_attempts = max(2, len(pool.alive) + 1) if len(pool) else 1
+            while True:
+                attempts += 1
+                used_proxy = pool.take() if len(pool) else None
+                client.set_proxy(used_proxy)
+                if used_proxy:
+                    print('  出口 {}'.format(used_proxy))
 
-            # 服务端风控：短时间注册账号过多时，新账号直接不发试用订阅
-            if state.get('status') != 'active':
-                print('  ❌ 服务端没有给这个账号发放可用订阅:')
-                print('     status={} plan={} provider={}'.format(
+                try:
+                    state = register_new_wallet(client, verbose=args.verbose)
+                except SubscriptionInactive as exc:
+                    print('  ⚠️ {}'.format(exc))
+                    pool.mark_dead(used_proxy)
+                    if attempts >= max_attempts:
+                        print('  ❌ 出口池已试完，服务端仍不发订阅')
+                        state = None
+                        break
+                    continue
+                except IpowError as exc:
+                    print('  ❌ 注册失败: {}'.format(exc))
+                    if attempts >= max_attempts:
+                        state = None
+                        break
+                    continue
+
+                if state.get('status') == 'active':
+                    current_proxy = used_proxy
+                    break
+
+                print('  ⚠️ 服务端没给这个账号发订阅（status={} plan={} provider={}）'.format(
                     state.get('status'), state.get('plan_id'), state.get('provider')))
-                print('     这是服务端风控，继续换号只会加重，已停止。')
-                print('     处理办法：等一段时间再跑，或者换一个网络出口。')
+                pool.mark_dead(used_proxy)
+                if attempts >= max_attempts:
+                    print('  ❌ 出口池已试完。这是出口 IP 被风控，等一段时间再跑，'
+                          '或者换一批出口。')
+                    state = None
+                    break
+                print('  🔄 换出口重试（剩余可用出口 {} 个）'.format(len(pool.alive)))
+
+            if state is None:
                 break
 
             wallets_used.append({
                 'address': state['address'],
                 'user_id': state['user_id'],
                 'plan_id': state['plan_id'],
+                'proxy': current_proxy,
                 'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             })
             print('  钱包 {} （用户 {} | 计划 {}）'.format(
@@ -1210,7 +1497,7 @@ def main(argv=None):
         batch = remaining[:take]
         print('  本批 {} 个（单钱包配额 {}）'.format(len(batch), args.quota_per_wallet))
 
-        nodes, limited, ok_ids, batch_unusable = pull_with_wallet(
+        nodes, limited, ok_ids, batch_unusable, inactive = pull_with_wallet(
             client, state, session_id, state['device_id'], args, batch)
 
         for nid in ok_ids:
@@ -1235,8 +1522,31 @@ def main(argv=None):
         remaining = [(nid, cc) for nid, cc in candidates
                      if nid not in seen_ids and nid not in unusable_ids]
 
-        if limited is not None:
-            if args.on_429 == 'wait' and limited and waited + limited <= args.max_wait:
+        if inactive:
+            # 出口被风控：换出口，同一个钱包重来。节点一个都没判死
+            others = [p for p in pool.alive if p != current_proxy] if len(pool) else []
+            if others and rotations < args.max_proxy_rotations:
+                pool.mark_dead(current_proxy)
+                current_proxy = pool.take()
+                client.set_proxy(current_proxy)
+                rotations += 1
+                print('  🔄 换出口 → {}（同一钱包继续，剩余出口 {} 个）'.format(
+                    current_proxy or '直连', len(pool.alive)))
+                time.sleep(1)
+            else:
+                print('  ❌ 没有可换的出口了，出口 IP 被风控。等一段时间再跑，'
+                      '或者换一批出口。')
+                break
+        elif limited is not None:
+            others = [p for p in pool.alive if p != current_proxy] if len(pool) else []
+            if others and rotations < args.max_proxy_rotations:
+                current_proxy = pool.take()
+                client.set_proxy(current_proxy)
+                rotations += 1
+                print('  🔄 撞限流 → 换出口 {}（同一钱包继续，配额按出口 IP 计）'.format(
+                    current_proxy or '直连'))
+                time.sleep(1)
+            elif args.on_429 == 'wait' and limited and waited + limited <= args.max_wait:
                 print('  ⏳ 原地等待服务端窗口 {}s（累计 {}s / 上限 {}s），'
                       '用同一个钱包继续'.format(limited, waited, args.max_wait))
                 time.sleep(limited + 2)
