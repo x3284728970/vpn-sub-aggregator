@@ -311,22 +311,36 @@ def decrypt_config(blob):
 def node_uri(o):
     from urllib.parse import quote
     tls = o.get("tls") or {}
-    reality = tls.get("reality") or {}
-    q = {"encryption": "none", "type": "tcp",
-         "sni": tls.get("server_name") or o.get("server") or ""}
-    if o.get("flow"):
-        q["flow"] = o["flow"]
-    if (tls.get("utls") or {}).get("enabled"):
-        q["fp"] = (tls["utls"].get("fingerprint") or "") or "chrome"
-    if reality.get("enabled"):
-        q["security"] = "reality"
-        q["pbk"] = reality.get("public_key") or ""
-        q["sid"] = reality.get("short_id") or ""
-    else:
-        q["security"] = "tls"
-    qs = "&".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in q.items() if v)
     tag = o.get("tag") or ""
-    return "vless://%s@%s:%s?%s#%s" % (o["uuid"], o.get("server"), o.get("server_port"), qs, quote(tag, safe=""))
+    if o.get("type") == "vless":
+        reality = tls.get("reality") or {}
+        q = {"encryption": "none", "type": "tcp",
+             "sni": tls.get("server_name") or o.get("server") or ""}
+        if o.get("flow"):
+            q["flow"] = o["flow"]
+        if (tls.get("utls") or {}).get("enabled"):
+            q["fp"] = (tls["utls"].get("fingerprint") or "") or "chrome"
+        if reality.get("enabled"):
+            q["security"] = "reality"
+            q["pbk"] = reality.get("public_key") or ""
+            q["sid"] = reality.get("short_id") or ""
+        else:
+            q["security"] = "tls"
+        qs = "&".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in q.items() if v)
+        return "vless://%s@%s:%s?%s#%s" % (o["uuid"], o.get("server"),
+                                           o.get("server_port"), qs, quote(tag, safe=""))
+    if o.get("type") == "tuic":
+        q = {"sni": tls.get("server_name") or o.get("server") or "",
+             "congestion_control": o.get("congestion_control") or "bbr",
+             "udp_relay_mode": o.get("udp_relay_mode") or "native"}
+        alpn = tls.get("alpn") or []
+        if alpn:
+            q["alpn"] = ",".join(alpn)
+        qs = "&".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in q.items() if v)
+        return "tuic://%s:%s@%s:%s?%s#%s" % (o["uuid"], o.get("password"),
+                                             o.get("server"), o.get("server_port"),
+                                             qs, quote(tag, safe=""))
+    return ""
 
 
 def encrypt_to(src, dst):
@@ -363,7 +377,7 @@ def main():
 
     uris, seen = [], set()
     for o in cfg.get("outbounds", []):
-        if o.get("type") != "vless":
+        if o.get("type") not in ("vless", "tuic"):
             continue
         try:
             u = node_uri(o)
@@ -378,7 +392,7 @@ def main():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("\n".join(uris) + "\n")
-    log("extracted %d vless -> %s" % (len(uris), OUT))
+    log("extracted %d nodes -> %s" % (len(uris), OUT))
     if encrypt_to(OUT, OUT_ENC):
         log("encrypted copy ready: %s" % OUT_ENC)
     return 0

@@ -240,7 +240,7 @@ def is_node_line(line: str) -> bool:
     line = line.strip()
     if not line or line.startswith("#") or line.startswith("//"):
         return False
-    return line.startswith(("vless://", "vmess://", "trojan://", "ss://", "ssr://"))
+    return line.startswith(("vless://", "vmess://", "trojan://", "ss://", "ssr://", "tuic://"))
 
 
 def extract_links(path: Path):
