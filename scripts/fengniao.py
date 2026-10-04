@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-蜂鸟加速器 - 自动注册并拉取节点（优化版，自定义输出路径与文件名）
-用法：
-    python fengniao_sign_fixed.py
-    python fengniao_sign_fixed.py --serial X --delay 1.0 --protocol trojan,vmess
-"""
 import base64
 import hashlib
 import json
@@ -37,8 +31,8 @@ except NameError:
     _SCRIPT_DIR = os.getcwd()
 OUTPUT_DIR = _SCRIPT_DIR + "/"
 # 固定文件名
-DATA_JSON = "蜂鸟数据.json"
-NODES_TXT = "蜂鸟节点.txt"
+DATA_JSON = "fengniao_data.json"
+NODES_TXT = "fengniao.txt"
 TOKEN_CACHE_FILE = ".fengniao_token_cache.json"   # 仍放在输出目录下
 
 # ---------- 工具函数 ----------
@@ -291,13 +285,13 @@ def fetch_nodes(serial: str, delay: float, protocols: list, cache_token: bool):
         if idx < len(nodes) - 1:
             time.sleep(delay)
 
-    # 保存 JSON（蜂鸟数据.json）
+    # 保存 JSON(fengniao_data.json)
     json_path = os.path.join(OUTPUT_DIR, DATA_JSON)
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"数据已保存至 {json_path}")
 
-    # 保存节点链接（蜂鸟节点.txt）
+    # 保存节点链接(fengniao.txt)
     links_path = os.path.join(OUTPUT_DIR, NODES_TXT)
     with open(links_path, "w", encoding="utf-8") as f:
         f.write("\n".join(all_links))

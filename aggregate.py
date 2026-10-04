@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-VPN 节点聚合脚本
-运行 scripts/ 目录下各提取脚本，合并去重并输出 Base64 订阅文件。
-可选：上传到 GitHub Private Gist，获得直链订阅地址。
-"""
-
 import os
 import sys
 import base64
@@ -38,8 +32,8 @@ EXCLUDE_FILES = {
     # 含凭据的中间文件，绝不能进订阅
     "token.json",
     ".fengniao_token_cache.json",
-    "蜂鸟数据.json",
-    "蓝猫_sub_base64.txt",
+    "fengniao_data.json",
+    "lanmao_sub_base64.txt",
     # iPoW 的中间文件（钱包记录与不可用缓存，属于运行痕迹，不是订阅）
     "iPoW_wallets.json",
     "iPoW_unusable.json",
@@ -48,13 +42,14 @@ EXCLUDE_FILES = {
 
 # 各脚本期望的节点输出文件（用于日志报告）
 EXPECTED_NODE_FILES = {
-    "__.py": ["菜鸟.txt"],
-    "TF__.py": ["银狐.txt", "TF__.txt", "foxlink.txt"],
+    "__.py": ["cainiao.txt"],
+    "TF__.py": ["yinhu.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
-    "devpn.py": ["nodes.txt", "devpn.txt"],
-    "sulian.py": ["sulian.txt", "速连.txt", "速连节点.txt"],
-    "lanmao.py": ["蓝猫.txt", "蓝猫_sub_base64.txt"],
+    "de.py": ["nodes.txt", "devpn.txt"],
+    "sulian.py": ["sulian.txt", "sulianb.txt", "sulianc.txt"],
+    "lanmao.py": ["lanmao.txt", "lanmao_sub_base64.txt"],
     "ipow.py": ["iPoW.txt"],
+    "kite.py": ["kite.txt"],
     # fengniao.py 不加（用户自己单独用）
 }
 
@@ -62,12 +57,11 @@ EXPECTED_NODE_FILES = {
 # GitHub Gist 上传（私有 Gist，无需仓库/Pages 设置）
 # ================================================================
 
-GIST_DESC = "VPN 节点订阅（自动更新）"
+GIST_DESC = "daily data"
 GIST_FILENAME = "jvhe.txt"
 
 
 def _github_token() -> str | None:
-    """优先用 MY_GITHUB_TOKEN，兼容 GITHUB_TOKEN（CI 默认）"""
     token = os.environ.get("MY_GITHUB_TOKEN", "").strip()
     if not token:
         token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -75,7 +69,6 @@ def _github_token() -> str | None:
 
 
 def _find_gist_id(token: str) -> str | None:
-    """按 description 查找已存在的 Gist ID"""
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
@@ -108,7 +101,6 @@ def _find_gist_id(token: str) -> str | None:
 
 
 def upload_to_gist(content: str) -> str | None:
-    """上传 Base64 订阅内容到私有 Gist，返回 raw 直链"""
     if requests is None:
         print("[GIST] requests 未安装，跳过 Gist 上传")
         return None
@@ -165,7 +157,6 @@ def upload_to_gist(content: str) -> str | None:
 
 
 def run_script(name, extra_env=None, args=None):
-    """运行单个提取脚本。失败不影响其他脚本。"""
     script_path = SCRIPTS_DIR / name
     if not script_path.exists():
         print(f"[SKIP] {name} 不存在")
@@ -219,7 +210,6 @@ def run_script(name, extra_env=None, args=None):
 
 
 def collect_outputs():
-    """收集 scripts/ 和 OUTPUT_DIR 下的节点链接文件，自动排除敏感中间文件。"""
     candidates = []
     for root, dirs, files in os.walk(str(SCRIPTS_DIR)):
         for f in files:
@@ -267,11 +257,6 @@ def extract_links(path: Path):
 
 
 def merge_all(file_list):
-    """合并去重。对 query 参数排序，消除顺序差异导致无法去重。
-
-    返回 (链接, 来源文件名) 序列，来源文件名用来决定节点名前缀。
-    节点名不参与去重键，所以重命名不会影响去重结果。
-    """
     seen = set()
     merged = []
 
@@ -341,11 +326,12 @@ def main():
     results["sulian.py"] = run_script("sulian.py")
     # zytvpn.py 已删除（注册接口返回 error，无法修复）
     # butterflyds.py 已删除（需要交互式输入，无法自动化）
-    # devpn.py / lanmao.py 已迁到提取面板自己跑（KataBump 容器），这里不再聚合
+    # de.py / lanmao.py moved to the panel, not aggregated here
     # results["devpn.py"] = run_script("devpn.py")
     # results["lanmao.py"] = run_script("lanmao.py")
     # ipow.py：限流是出口 IP 级滑动窗口，等待上限压到 420 秒，避免顶满 20 分钟总超时
     results["ipow.py"] = run_script("ipow.py", args=["--quiet", "--max-wait", "420"])
+    results["kite.py"] = run_script("kite.py")
 
     # 收集输出文件
     files = collect_outputs()

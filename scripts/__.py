@@ -186,7 +186,7 @@ def main():
     for node_type, count in sorted(node_types.items()):
         print(f"    - {node_type}: {count} 个")
     
-    output_file = "菜鸟.txt"
+    output_file = "cainiao.txt"
     with open(output_file, "w", encoding="utf-8") as f:
         for node in nodes:
             f.write(node + "\n")

@@ -1,26 +1,4 @@
 #!/usr/bin/env python3
-"""
-作废旧订阅 Gist
-================
-场景：之前把 sub_b64.txt 的 raw 链接发给别人了，现在要让它失效。
-
-策略（可组合，默认全开）：
-  1. 把 sub_b64.txt 的内容替换成一个「死节点」，对方客户端下次更新后
-     所有可用节点被覆盖掉，只剩一条连不通的。
-  2. 同时把 sub.txt / jvhe.txt 等其它旧订阅文件也一并作废。
-
-注意：
-  - 不删 Gist！删了 raw 链接会 404，对方客户端更新失败会**继续用本地缓存的旧节点**。
-    覆盖成死节点才能让他真的用不了。
-  - GitHub raw 有 CDN 缓存，覆盖后几分钟内生效。
-  - 需要 token 具备 gist scope（classic PAT）。
-
-用法：
-  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py
-  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py --dry-run
-  MY_GITHUB_TOKEN=ghp_xxx python3 purge_old_sub.py --keep jvhe.txt
-"""
-
 import argparse
 import base64
 import os
@@ -49,7 +27,6 @@ def headers(token):
 
 
 def list_all_gists(token):
-    """分页拉取账号下所有 Gist。"""
     out = []
     page = 1
     while True:

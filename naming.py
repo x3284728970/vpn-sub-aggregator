@@ -1,24 +1,3 @@
-"""节点重命名：把各来源脚本产出的节点统一改成「VPN名+地区」形式。
-
-各来源脚本原来各写各的名字，风格完全不统一：
-
-    __.py        🇭🇰香港专线01+下载专用
-    lanmao.py    🇯🇵日本专线-01 专线优化
-    Surfer.py    SF香港
-    TF__.py      HK-香港 / HK-香港-Gold
-    sulian.py    日本东京(YouTube,ChatGPT等)
-    devpn.py     DeVPN-HK-0
-    ipow.py      iPoW-日本-01
-
-统一之后只保留两件信息：哪个 VPN、哪个地区。
-
-    菜鸟香港   蓝猫日本   SF香港   银狐香港   银狐香港Gold
-    速连日本   DE香港     iPoW香港
-
-同一来源同一地区有多个节点时，第二个起追加 `-2`、`-3`（客户端与 Clash 都要求名字唯一）。
-来源自己明确标注了档位的（如银狐的 Gold），保留成后缀，避免把两档线路静默合并。
-"""
-
 import base64
 import json
 import urllib.parse
@@ -28,26 +7,27 @@ import urllib.parse
 # 注意键是「节点输出文件」的名字，不是脚本名 —— 聚合器是按输出文件来的。
 # 同一个来源可能有多个输出文件名（历史遗留），全部列上。
 FILE_TAGS = {
-    "菜鸟.txt": "菜鸟",
-    "银狐.txt": "银狐", "TF__.txt": "银狐", "foxlink.txt": "银狐",
+    "cainiao.txt": "cainiao",
+    "yinhu.txt": "yinhu", "TF__.txt": "yinhu", "foxlink.txt": "yinhu",
     "surfer.txt": "SF", "SF.txt": "SF",
-    "sulian.txt": "速连", "速连.txt": "速连", "速连节点.txt": "速连",
+    "sulian.txt": "sulian", "sulianb.txt": "sulian", "sulianc.txt": "sulian",
     "nodes.txt": "DE", "devpn.txt": "DE",
-    "蓝猫.txt": "蓝猫",
+    "lanmao.txt": "lanmao",
     "iPoW.txt": "iPoW",
-    "蜂鸟.txt": "蜂鸟",
+    "kite.txt": "Kite",
+    "fengniao.txt": "fengniao",
 }
 
 # 脚本名 → 节点名前缀（供 run_script / 文档使用，键是 scripts/ 下的文件名）
 SOURCE_TAGS = {
-    "__.py": "菜鸟",
-    "TF__.py": "银狐",
+    "__.py": "cainiao",
+    "TF__.py": "yinhu",
     "Surfer.py": "SF",
-    "sulian.py": "速连",
-    "devpn.py": "DE",
-    "lanmao.py": "蓝猫",
+    "sulian.py": "sulian",
+    "de.py": "DE",
+    "lanmao.py": "lanmao",
     "ipow.py": "iPoW",
-    "fengniao.py": "蜂鸟",
+    "fengniao.py": "fengniao",
 }
 
 # 兼容旧调用
@@ -151,7 +131,6 @@ def _b64pad(s):
 
 
 def flag_to_cc(text):
-    """把旗帜 emoji 还原成国家代码。🇭🇰 = U+1F1ED U+1F1F0 → HK。"""
     out = []
     i = 0
     while i < len(text) - 1:
@@ -171,15 +150,6 @@ def _tokens(text):
 
 
 def detect_region(*texts):
-    """从候选文本里识别地区，返回中文地区名。识别不出来返回 UNKNOWN_REGION。
-
-    优先级：**城市名 → 中文地区关键词 → 旗帜 emoji → 国家代码**。
-
-    城市排在地区前面是刻意的：源把城市写进名字时就按城市落地命名，
-    银狐的 `CA-多伦多` → `多伦多`，比笼统的 `加拿大` 有用；速连的 `日本东京` → `东京`。
-    中文关键词又优先于旗帜，因为实测部分厂商把所有节点都挂 🇨🇳 前缀
-    （如「🇨🇳台湾专线01」），此时文案里的「台湾」才是真实落地，旗帜只是装饰。
-    """
     raw = "  ".join(t for t in texts if t)
     if not raw:
         return UNKNOWN_REGION
@@ -222,7 +192,6 @@ def _vmess_payload(link):
 
 
 def current_name(link):
-    """取链接当前的节点名。解析失败返回 None。"""
     if link.startswith("vmess://"):
         data = _vmess_payload(link)
         return None if data is None else str(data.get("ps") or "")
@@ -232,7 +201,6 @@ def current_name(link):
 
 
 def with_name(link, name):
-    """把链接的节点名换成 name，协议本体不动。"""
     if link.startswith("vmess://"):
         data = _vmess_payload(link)
         if data is None:
@@ -254,11 +222,6 @@ def build_name(source_tag, region, original):
 
 
 def apply(pairs):
-    """pairs 是 (链接, 来源文件名) 序列，返回重命名并排好序的链接列表。
-
-    名字全局唯一：同一 (来源, 地区, 档位) 的第二个节点起追加序号，如 `DE香港2`。
-    识别不出地区的就保持「未知」，不猜、也不拿别的来源起的名字来顶。
-    """
     used = {}
     named = []
 

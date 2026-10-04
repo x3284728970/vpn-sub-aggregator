@@ -1,4 +1,4 @@
-name: VPN Sub Aggregator
+name: daily-job
 
 concurrency:
   group: vpn-sub-aggregator
@@ -32,7 +32,7 @@ jobs:
       - name: Aggregate nodes & upload to Gist
         env:
           MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
-          # 可选：给 iPoW 来源指定出口。没配置这两个 Secret 就是直连，不影响其它来源。
+          #
           IPOW_PROXY_URL: ${{ secrets.IPOW_PROXY_URL }}
           IPOW_BASE_URL: ${{ secrets.IPOW_BASE_URL }}
         run: |

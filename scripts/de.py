@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""DeVPN 一键拉节点（单文件，拷走即可跑）
-
-    python3 devpn.py
-
-流程：自动注册新账号 → 绑邀请码 → 领免费时长
-     → 各地区并发各拉 10 轮并激活 → 保存 nodes.txt / last_account.json
-
-依赖：
-  - Python 3
-  - cryptography 或 pynacl（二选一，用于 ed25519 注册签名）
-        pip install cryptography
-  - 能访问外网
-
-不需要其它本地文件、配置、数据库。
-"""
 import base64
 import hashlib
 import json
@@ -43,7 +28,6 @@ def _rotl(x, n):
     return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
 
 def sm3(msg: bytes) -> bytes:
-    """标准 SM3，返回 32 字节。"""
     ml = len(msg) * 8
     msg = msg + b"\x80"
     while len(msg) % 64 != 56:
@@ -134,7 +118,6 @@ def _kdf(z: bytes, klen: int) -> bytes:
     return out[:klen]
 
 def _sm2_encrypt(msg: bytes) -> bytes:
-    """C1C3C2，C1 不带 0x04 前缀。返回原始字节。"""
     g = (_GX, _GY)
     p = (_PX, _PY)
     while True:
@@ -151,7 +134,6 @@ def _sm2_encrypt(msg: bytes) -> bytes:
     return c1[0].to_bytes(32, "big") + c1[1].to_bytes(32, "big") + c3 + c2
 
 def dsfunique_for(device_id: str) -> str:
-    """device_id(16hex 字符串) → dsfunique 224-hex。"""
     return _sm2_encrypt(device_id.encode("ascii")).hex()
 
 # ================================================================
@@ -164,7 +146,6 @@ SIGN = ("CA:43:9D:8D:87:EB:ED:AD:FC:71:E1:DF:70:6B:54:D0:"
 APP_VER = "2.1.17"
 
 def make_proof(android_id, ts_ms, urandom_nonce):
-    """nativeBuildProof 完整算法。"""
     key = hashlib.sha256(f"{PKG}|{SIGN}|{urandom_nonce}|{MAGIC}".encode()).digest()
     xor = bytes(a ^ k for a, k in zip(android_id.encode(), key[:16]))
     device_cipher = xor.hex()
@@ -200,7 +181,6 @@ def b58encode(data: bytes) -> str:
     return (b"1" * pad + out[::-1]).decode("ascii")
 
 def ed25519_keypair():
-    """返回 (public_raw_32, sign_fn)，sign_fn(msg:bytes)->sig64。"""
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         seed = os.urandom(32)
@@ -291,7 +271,6 @@ def make_headers(token, device_id, proof=None):
     }
 
 def make_login_device_info(android_id):
-    """App getDeviceInfo() 字段（用于登录 fingerprint / nonce 查询）。"""
     return {
         "brand": DEVICE_BRAND,
         "deviceId": DEVICE_MODEL,
@@ -314,10 +293,6 @@ def pick_base(hdrs=None):
     return None
 
 def register_account(invite=DEFAULT_INVITE, android_id=None, claim_free=True):
-    """生成 Solana 密钥 → 登录拿新 dsf-token → 绑邀请码 → 领免费时长。
-
-    返回 dict: token / android_id / wallet / base / user / proof
-    """
     android_id = android_id or "".join(random.choice("0123456789abcdef") for _ in range(16))
     device_info = make_login_device_info(android_id)
     fingerprint = hashlib.sha256(
@@ -466,8 +441,6 @@ def get_countries(base, token, hdrs, residence=False):
         return []
 
 def activate_node(node):
-    """POST sm2ciphertext 到节点服务器的 /server/setAccount。
-    返回 True 表示激活成功（data:true）。"""
     domain = node.get("domainName")
     port = node.get("appPort") or "443"
     sm2 = node.get("sm2ciphertext") or ""

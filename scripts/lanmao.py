@@ -17,8 +17,8 @@ except NameError:
     OUT_DIR = os.getcwd()
 
 TOKEN_FILE = os.path.join(OUT_DIR, "token.json")
-NODES_FILE = os.path.join(OUT_DIR, "蓝猫.txt")
-SUB64_FILE = os.path.join(OUT_DIR, "蓝猫_sub_base64.txt")
+NODES_FILE = os.path.join(OUT_DIR, "lanmao.txt")
+SUB64_FILE = os.path.join(OUT_DIR, "lanmao_sub_base64.txt")
 
 DEVICE_ID = "py-" + "".join(random.choices(string.hexdigits.lower(), k=12))
 

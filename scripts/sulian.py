@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-sulian.py - 速连 VPN 节点获取脚本 (优化版)
-
-用法：
-    python3 sulian.py
-    python3 sulian.py --count 20 --clip
-    python3 sulian.py --region 香港 日本 --output my_nodes.txt
-    python3 sulian.py --notify --quiet
-"""
-
 import argparse
 import base64
 import json
@@ -33,7 +23,7 @@ class Config:
     TIMEOUT = 20
     MAX_RETRIES = 3
     RETRY_BACKOFF = 1.5
-    DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "速连节点.txt")
+    DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sulian.txt")
     REQUEST_DELAY = 0.1  # 每个节点生成后的延迟，避免风控
 
 # ---------- 日志与颜色 ----------
@@ -67,7 +57,6 @@ logger.addHandler(ch)
 
 # ---------- 工具函数 ----------
 def retry_call(func, *args, max_retries=Config.MAX_RETRIES, backoff=Config.RETRY_BACKOFF, **kwargs):
-    """带指数退避的重试"""
     last_exc = None
     for i in range(max_retries + 1):
         try:
@@ -122,7 +111,6 @@ def send_notification(title: str, body: str):
     return None
 
 def extract_short_id(raw_sid: str) -> str:
-    """清洗 short_id，确保为16位十六进制字符串，不足补0"""
     if not raw_sid:
         return "0" * 16
     hex_chars = ''.join(c for c in raw_sid if c.isdigit() or c.lower() in 'abcdef')
@@ -153,7 +141,6 @@ class SpeedLinkClient:
         return base64.b64encode(random_uuid.encode()).decode()
 
     def register_device(self):
-        """注册设备，获取 user_id"""
         client_id = self.generate_client_id()
         url = f"{self.base_url}/sl/connect/init"
         headers = {"Content-Type": "application/json"}
@@ -173,7 +160,6 @@ class SpeedLinkClient:
             return False
 
     def get_node_list(self):
-        """获取节点列表"""
         if not self.user_id:
             raise RuntimeError("未注册设备")
         url = f"{self.base_url}/sl/server/list"
@@ -225,7 +211,6 @@ class SpeedLinkClient:
         return f"{base}?{params}#{encoded_label}"
 
     def run(self, region_filter=None, count_limit=0):
-        """执行主流程，返回生成的链接列表"""
         if not retry_call(self.register_device):
             logger.error("设备注册失败，退出")
             return []

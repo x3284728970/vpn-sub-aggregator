@@ -36,6 +36,6 @@ jobs:
         env:
           MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
-          python3 purge_old_sub.py \
+          python3 purge_old.py \
             --targets "${{ inputs.targets }}" \
             ${{ inputs.dry_run == 'true' && '--dry-run' || '' }}

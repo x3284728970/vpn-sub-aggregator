@@ -29,7 +29,6 @@ class FoxLinkNodeExtractor:
         })
     
     def register_device(self) -> bool:
-        """注册新设备获取Token"""
         print("[1/2] 注册新设备...")
         
         app_instance_id = str(uuid.uuid4()).upper()
@@ -84,7 +83,6 @@ class FoxLinkNodeExtractor:
             return False
     
     def fetch_node_config(self) -> Optional[Dict]:
-        """获取节点配置"""
         print("[2/2] 获取节点配置...")
         
         if not self.token:
@@ -210,7 +208,7 @@ def main():
     links = extractor.run()
     
     if links:
-        with open("银狐.txt", "w", encoding="utf-8") as f:
+        with open("yinhu.txt", "w", encoding="utf-8") as f:
             for link in links:
                 f.write(link + "\n")
         
@@ -233,7 +231,7 @@ def main():
                 country = name.split("-")[0] if "-" in name else "Unknown"
                 countries.add(country)
         
-        print(f"\n✅ 已保存 {len(links)} 个节点到 银狐.txt")
+        print(f"\n✅ 已保存 {len(links)} 个节点到 yinhu.txt")
         print(f"📍 国家/地区: {len(countries)} 个")
         print(f"📡 普通节点: {normal_count} 个")
         print(f"🥇 黄金节点: {gold_count} 个")
