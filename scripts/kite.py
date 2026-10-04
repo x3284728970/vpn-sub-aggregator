@@ -330,6 +330,7 @@ def node_uri(o):
 
 
 def encrypt_to(src, dst):
+    key_b64 = os.environ.get("KITE_ENC_KEY") or ""
     if not key_b64:
         log("KITE_ENC_KEY not set, skip encrypt")
         return False
