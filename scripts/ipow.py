@@ -826,6 +826,8 @@ def parse_args(argv=None):
     ap.add_argument("--strict", action="store_true", help="hysteria2 也要求 TLS 握手成功")
     ap.add_argument("--no-stats", action="store_true", help="不打印接口耗时统计")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--links-scope", choices=["reachable", "all"], default="reachable",
+                    help="iPoW.txt 的内容范围：reachable=只写探得通的（默认），all=全量节点")
     return ap.parse_args(argv)
 
 
@@ -1012,9 +1014,39 @@ def main(argv=None):
                        "node_count": len(r_nodes), "nodes": r_nodes}, f, ensure_ascii=False, indent=1)
         print("[probe] reachable %d nodes -> reachable_uris.txt" % len(r_uris))
 
+    if args.links_scope == "all":
+        # 全量：可达的排前面，不可达的标注并跟在后面，供客户端自己测速选优
+        reachable_set = set()
+        if probe is not None:
+            for n in nodes:
+                if probe.reachable(n["server"], int(n["port"]), n["type"] != "hysteria2"):
+                    reachable_set.add((n["server"], int(n["port"]), n["type"]))
+        reachable_uris = []
+        unreachable_uris = []
+        for u in uris:
+            if u in reachable_uris:
+                reachable_uris.append(u)
+            else:
+                unreachable_uris.append(u)
+        # 上面写法有 bug，换正确写法
+        reachable_uris = []
+        unreachable_uris = []
+        for n in nodes:
+            u = node_uri(n, n.get("name"))
+            if not u:
+                continue
+            if probe.reachable(n["server"], int(n["port"]), n["type"] != "hysteria2"):
+                reachable_uris.append(u)
+            else:
+                unreachable_uris.append(u)
+        if reachable_uris:
+            reachable_uris.insert(0, "# iPoW reachable first (%d) @ %s" % (len(reachable_uris), ts))
+        if unreachable_uris:
+            unreachable_uris.insert(0, "# iPoW unreachable (%d) @ %s" % (len(unreachable_uris), ts))
+        deliver = reachable_uris + unreachable_uris
     with open(LINKS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(deliver) + "\n")
-    print("[out] %s <- %d 条" % (os.path.relpath(LINKS_FILE, ROOT), len(deliver)))
+    print("[out] %s <- %d 条 (scope=%s)" % (os.path.relpath(LINKS_FILE, ROOT), len(deliver), args.links_scope))
     print_stats(http, t0, args.no_stats)
     print("\nfiles in %s:" % os.path.relpath(OUT, ROOT))
     for fn in sorted(os.listdir(OUT)):
