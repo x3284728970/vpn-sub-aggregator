@@ -786,7 +786,9 @@ def region_of(node, cat_info):
 
 
 def apply_names(nodes, cat_info):
-    """tag 是 gcp-asia-east1-1 这种内部 id，换成中文地区名，订阅里才可读。"""
+    """tag 是 gcp-asia-east1-1 这种内部 id，换成中文地区名，订阅里才可读。
+    同名节点自动加序号（地区、地区2、地区3…），hy2 后缀保留在序号之后。"""
+    counts = {}
     for n in nodes:
         region = region_of(n, cat_info)
         if not region:
@@ -794,7 +796,12 @@ def apply_names(nodes, cat_info):
             n["name"] = n.get("tag") or ""
             continue
         n["region"] = region
-        n["name"] = region + ("·H2" if n["type"] == "hysteria2" else "")
+        suffix = "·H2" if n["type"] == "hysteria2" else ""
+        c = counts.get(region, 0) + 1
+        counts[region] = c
+        n["name"] = (region if c == 1 else "%s%d" % (region, c)) + suffix
+    # 保持输出稳定：按地区、序号排序
+    nodes.sort(key=lambda n: (n.get("region") or "", n.get("name") or ""))
 
 
 # ---------------------------------------------------------------- 主流程
@@ -1014,36 +1021,7 @@ def main(argv=None):
                        "node_count": len(r_nodes), "nodes": r_nodes}, f, ensure_ascii=False, indent=1)
         print("[probe] reachable %d nodes -> reachable_uris.txt" % len(r_uris))
 
-    if args.links_scope == "all":
-        # 全量：可达的排前面，不可达的标注并跟在后面，供客户端自己测速选优
-        reachable_set = set()
-        if probe is not None:
-            for n in nodes:
-                if probe.reachable(n["server"], int(n["port"]), n["type"] != "hysteria2"):
-                    reachable_set.add((n["server"], int(n["port"]), n["type"]))
-        reachable_uris = []
-        unreachable_uris = []
-        for u in uris:
-            if u in reachable_uris:
-                reachable_uris.append(u)
-            else:
-                unreachable_uris.append(u)
-        # 上面写法有 bug，换正确写法
-        reachable_uris = []
-        unreachable_uris = []
-        for n in nodes:
-            u = node_uri(n, n.get("name"))
-            if not u:
-                continue
-            if probe.reachable(n["server"], int(n["port"]), n["type"] != "hysteria2"):
-                reachable_uris.append(u)
-            else:
-                unreachable_uris.append(u)
-        if reachable_uris:
-            reachable_uris.insert(0, "# iPoW reachable first (%d) @ %s" % (len(reachable_uris), ts))
-        if unreachable_uris:
-            unreachable_uris.insert(0, "# iPoW unreachable (%d) @ %s" % (len(unreachable_uris), ts))
-        deliver = reachable_uris + unreachable_uris
+    # --links-scope 在下面统一决定 deliver；命名在 apply_names 里已经换成中文地区名
     with open(LINKS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(deliver) + "\n")
     print("[out] %s <- %d 条 (scope=%s)" % (os.path.relpath(LINKS_FILE, ROOT), len(deliver), args.links_scope))
