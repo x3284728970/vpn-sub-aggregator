@@ -1,3 +1,4 @@
 requests>=2.28.0
 pycryptodome>=3.19.0
 cryptography>=41.0.0
+eth-account>=0.12.0

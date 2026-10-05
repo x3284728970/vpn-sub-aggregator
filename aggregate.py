@@ -34,10 +34,17 @@ EXCLUDE_FILES = {
     ".fengniao_token_cache.json",
     "fengniao_data.json",
     "lanmao_sub_base64.txt",
-    # iPoW 的中间文件（钱包记录与不可用缓存，属于运行痕迹，不是订阅）
+    # iPoW 的中间文件（钱包记录与原始配置，属于运行痕迹，不是订阅）
     "iPoW_wallets.json",
     "iPoW_unusable.json",
     "iPoW_nodes.json",
+    "extract_accounts.jsonl",
+    # ipow_get 的中间产物；订阅只取 iPoW.txt（=可达清单），避免把不可达节点混进来
+    "all_nodes.json",
+    "all_uris.txt",
+    "reachable_uris.txt",
+    "reachable_nodes.json",
+    "singbox_config.json",
 }
 
 # 各脚本期望的节点输出文件（用于日志报告）
@@ -240,7 +247,8 @@ def is_node_line(line: str) -> bool:
     line = line.strip()
     if not line or line.startswith("#") or line.startswith("//"):
         return False
-    return line.startswith(("vless://", "vmess://", "trojan://", "ss://", "ssr://", "tuic://"))
+    return line.startswith(("vless://", "vmess://", "trojan://", "ss://", "ssr://", "tuic://",
+                            "hysteria2://", "hy2://"))
 
 
 def extract_links(path: Path):
@@ -296,6 +304,8 @@ def count_by_type(links):
             t = "TROJAN"
         elif l.startswith("ss://"):
             t = "SS"
+        elif l.startswith(("hysteria2://", "hy2://")):
+            t = "HY2"
         else:
             t = "OTHER"
         stats[t] = stats.get(t, 0) + 1
@@ -329,8 +339,8 @@ def main():
     # de.py / lanmao.py moved to the panel, not aggregated here
     # results["devpn.py"] = run_script("devpn.py")
     # results["lanmao.py"] = run_script("lanmao.py")
-    # ipow.py：限流是出口 IP 级滑动窗口，等待上限压到 420 秒，避免顶满 20 分钟总超时
-    results["ipow.py"] = run_script("ipow.py", args=["--quiet", "--max-wait", "420"])
+    # ipow.py：订阅 + P2P 两路并发采集，接口有请求频率闸门（撞 429 自动降速重试）
+    results["ipow.py"] = run_script("ipow.py")
     results["kite.py"] = run_script("kite.py")
 
     # 收集输出文件

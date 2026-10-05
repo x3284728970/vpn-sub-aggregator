@@ -34,3 +34,6 @@ scripts/*.json
 scripts/*.log
 scripts/*.yaml
 scripts/*.account
+# ipow 脚本的中间产物与钱包状态（含私钥，绝不入库）
+scripts/out/
+scripts/state/
