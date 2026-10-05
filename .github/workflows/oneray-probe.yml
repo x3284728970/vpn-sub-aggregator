@@ -1,0 +1,11 @@
+name: oneray-probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: probe
+        run: python3 scripts/oneray_probe.py
