@@ -1019,9 +1019,25 @@ def main(argv=None):
             json.dump({"generated_at": ts,
                        "probe": {"%s:%d" % k: v for k, v in sorted(probe.snapshot().items())},
                        "node_count": len(r_nodes), "nodes": r_nodes}, f, ensure_ascii=False, indent=1)
-        print("[probe] reachable %d nodes -> reachable_uris.txt" % len(r_uris))
 
-    # --links-scope 在下面统一决定 deliver；命名在 apply_names 里已经换成中文地区名
+    if args.links_scope == "all":
+        # 全量：可达的排前面，不可达的跟在后面（不插注释）
+        reachable_uris = []
+        unreachable_uris = []
+        if probe is not None:
+            for n in nodes:
+                u = node_uri(n, n.get("name"))
+                if not u:
+                    continue
+                if probe.reachable(n["server"], int(n["port"]), n["type"] != "hysteria2"):
+                    reachable_uris.append(u)
+                else:
+                    unreachable_uris.append(u)
+            deliver = reachable_uris + unreachable_uris
+            if reachable_uris:
+                print("[probe] reachable %d nodes -> reachable_uris.txt" % len(reachable_uris))
+        else:
+            deliver = uris
     with open(LINKS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(deliver) + "\n")
     print("[out] %s <- %d 条 (scope=%s)" % (os.path.relpath(LINKS_FILE, ROOT), len(deliver), args.links_scope))
