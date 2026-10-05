@@ -65,7 +65,8 @@ from datetime import datetime, timezone
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-BASE = os.environ.get("IPOW_BASE_URL", "https://ipow.ai").rstrip("/")
+# GitHub Actions 里 Secret 没配时环境变量是空串，不能当成地址用
+BASE = (os.environ.get("IPOW_BASE_URL") or "").strip().rstrip("/") or "https://ipow.ai"
 UA = "iPoWVPN/4.3.5 (Android)"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(ROOT, "state")
@@ -124,6 +125,9 @@ class Http:
         self.stats = {}
         self._slock = threading.Lock()
         self.base = self._split(base)
+        host = self.base["host"]
+        if not host or any(c.isspace() for c in host):
+            raise ValueError("API 地址无法解析: %r（检查 --base-url 或环境变量 IPOW_BASE_URL）" % base)
 
     @staticmethod
     def _split(url):
@@ -167,8 +171,11 @@ class Http:
             except Exception:
                 pass
 
-    def request(self, method, url, token=None, body=None):
-        """返回 (status, parsed)。429 原样返回，由调用方决定退避。"""
+    def request(self, method, url, token=None, body=None, retries=None):
+        """返回 (status, parsed)。429 原样返回，由调用方决定退避。
+
+        retries 可以按调用点覆盖：订阅配置那一发带着全量节点，值得多试几次。
+        """
         tgt, path = self._resolve(url)
         headers = {"User-Agent": UA, "Accept": "application/json", "Host": tgt["netloc"]}
         if token:
@@ -177,8 +184,9 @@ class Http:
         if body is not None:
             data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        limit = self.retries if retries is None else max(int(retries), 0)
         last = None
-        for attempt in range(self.retries + 1):
+        for attempt in range(limit + 1):
             self.limiter.wait()
             t = time.time()
             try:
@@ -190,16 +198,16 @@ class Http:
             except _TRANSIENT as exc:
                 self._drop(tgt)
                 last = "%s: %s" % (type(exc).__name__, exc)
-                if attempt >= self.retries:
+                if attempt >= limit:
                     raise TransientError("%s %s 连接失败 %s" % (method, path, last))
-                time.sleep(min(0.4 * (attempt + 1), 1.5))
+                time.sleep(min(0.6 * (2 ** attempt), 6.0))
                 continue
             except Exception as exc:                       # 未知异常同样按瞬态处理
                 self._drop(tgt)
                 last = "%s: %s" % (type(exc).__name__, exc)
-                if attempt >= self.retries:
+                if attempt >= limit:
                     raise TransientError("%s %s 失败 %s" % (method, path, last))
-                time.sleep(min(0.4 * (attempt + 1), 1.5))
+                time.sleep(min(0.6 * (2 ** attempt), 6.0))
                 continue
             with self._slock:
                 key = "%s %s" % (method, (path.split("?")[0] or path)[:48])
@@ -210,7 +218,7 @@ class Http:
             except Exception:
                 parsed = txt
             if status >= 500:
-                if attempt >= self.retries:
+                if attempt >= limit:
                     raise TransientError("%s %s 服务端 %s %s" % (method, path, status, txt[:120]))
                 time.sleep(min(0.5 * (2 ** attempt), 4.0))
                 continue
@@ -544,7 +552,7 @@ def sub_pull(http, token, rec, sub_url, country, client_type, rounds, collector,
             if not sid:
                 log("[sub:%s r%d] session failed: %s" % (client_type, i + 1, str(ss)[:140]))
                 continue
-        st, conf = http.request("GET", sub_url + "?session_id=" + sid)
+        st, conf = http.request("GET", sub_url + "?session_id=" + sid, retries=6)
         if st != 200 or not isinstance(conf, dict) or "outbounds" not in conf:
             log("[sub:%s r%d] config fetch failed(%s): %s"
                 % (client_type, i + 1, st, str(conf)[:140]))
@@ -843,9 +851,10 @@ def main(argv=None):
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(STATE, exist_ok=True)
 
-    if args.base_url != BASE:
-        log("[base] %s" % args.base_url)
-    http = Http(args.base_url, timeout=args.timeout, min_interval=args.min_interval,
+    base = (args.base_url or "").strip() or BASE
+    if base != "https://ipow.ai":
+        log("[base] %s" % base)
+    http = Http(base, timeout=args.timeout, min_interval=args.min_interval,
                 retries=args.retries, max_wait=args.max_wait, quiet=args.quiet)
     probe = None if args.no_probe else ProbePool(
         workers=args.probe_workers, tcp_timeout=args.tcp_timeout,
