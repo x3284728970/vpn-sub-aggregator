@@ -17,9 +17,8 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Output（由 CI 生成，无需提交；kite.txt.enc 例外，供远端下载）
+# Output（由 CI 生成，无需提交）
 output/*
-!output/kite.txt.enc
 
 # 脚本运行时的中间文件
 *.log

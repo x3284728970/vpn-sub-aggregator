@@ -14,7 +14,6 @@ FILE_TAGS = {
     "nodes.txt": "DE", "devpn.txt": "DE",
     "lanmao.txt": "lanmao",
     "iPoW.txt": "iPoW",
-    "kite.txt": "Kite",
     "fengniao.txt": "fengniao",
 }
 

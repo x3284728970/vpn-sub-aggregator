@@ -58,7 +58,6 @@ EXPECTED_NODE_FILES = {
     "sulian.py": ["sulian.txt", "sulianb.txt", "sulianc.txt"],
     "lanmao.py": ["lanmao.txt", "lanmao_sub_base64.txt"],
     "ipow.py": ["iPoW.txt"],
-    "kite.py": ["kite.txt"],
     # fengniao.py 不加（用户自己单独用）
 }
 
@@ -343,7 +342,7 @@ def main():
     # results["lanmao.py"] = run_script("lanmao.py")
     # ipow.py：订阅 + P2P 两路并发采集，接口有请求频率闸门（撞 429 自动降速重试）
     results["ipow.py"] = run_script("ipow.py", args=["--links-scope", "all"])
-    results["kite.py"] = run_script("kite.py")
+    # kite.py 已删除（2026-10-07，kite-daily 连挂后用户弃用）
 
     # 收集输出文件
     files = collect_outputs()
