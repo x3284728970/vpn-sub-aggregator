@@ -45,6 +45,8 @@ EXCLUDE_FILES = {
     "reachable_uris.txt",
     "reachable_nodes.json",
     "singbox_config.json",
+    "clash_proxies.yaml",
+    "singbox_proxies.json",
 }
 
 # 各脚本期望的节点输出文件（用于日志报告）

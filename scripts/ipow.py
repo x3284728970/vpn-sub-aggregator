@@ -11,8 +11,8 @@ iPoWVPN 节点一条龙提取（订阅池 + P2P 池 + 可达筛查）
   可达筛查: 服务器 TCP(+TLS) 探测（国内直连大多数 GCP IP 在 TCP 层被阻断，能连的进 reachable 清单）
 
 v2 提速改造（2026-10-05）:
-  1) 不同 client_type 的 session 并发建（实测 device_limit=2 内不互踢）；同一 client_type
-     再建才会踢掉前一个，采集阶段一律不再重建 session
+  1) 订阅按 client_type 串行“建 session -> 立刻拉配置”；服务端 device_limit=2，
+     同设备只保留最近两个 session，批量建完再拉会吃 409 vpn_session_required
   2) 订阅取配置 与 P2P capability 并行；capability 用 --concurrency 并发跑
   3) 每拿到一个 server 立刻丢进探测池（边收边探），收尾只等没探完的，不再串行等两分钟
   4) HTTP 长连接复用（urllib 每请求重新握手，实测平均 1.8s -> 1.0s）
@@ -32,18 +32,31 @@ v2 提速改造（2026-10-05）:
   out/reachable_uris.txt    【主交付】TCP(+TLS) 实测可达的 URI
   out/reachable_nodes.json  可达节点结构化数据 + 每个 server:port 的探测结果
   out/singbox_config.json   最新一份原始订阅配置
+  out/clash_proxies.yaml    --emit-configs：Clash Meta 代理组（可直接导入手机客户端）
+  out/singbox_proxies.json  --emit-configs：sing-box outbounds 配置
   iPoW.txt（脚本同目录）    给聚合器用的订阅文件，内容等于 reachable_uris.txt（--no-probe 时为全量）
 
+v3 合并（2026-10-07：并入用户收到的 Termux 交流版）:
+  1) 内置 Keccak-256 / secp256k1 / AES-256-GCM 纯 Python 实现，零依赖也能跑（--pure-crypto 强制）
+  2) hysteria2 分享链接纠偏：server_name 是 IP 时不输出 sni 参数，统一带 insecure=1
+  3) 默认 client_types 补上 ios（官方 ios 池里另有 n-*.node.ipow.ai 域名节点）
+  4) 新增 --selftest / --emit-configs / --out-dir；订阅拉取全部合并为一次请求（不再逐国查）
+  5) 登录慢响应误判修复：重试 + 超时放宽 + 拒登原因可见（不再静默烧新钱包）
+
 依赖:
-  pip install eth-account cryptography
+  pip install eth-account cryptography（推荐装库加速；缺失时自动退回内置纯 Python 实现，Termux 可不装）
 
 用法:
-  python ipow.py                     # 全流程（windows+android 订阅 + P2P 全目录 + 可达筛查）
+  python ipow.py                     # 全流程（windows+android+ios 订阅 + P2P 全目录 + 可达筛查）
   python ipow.py --no-probe          # 跳过可达筛查（只出全量）
   python ipow.py --skip-p2p          # 只拉订阅路径（5 个请求就出 90+ 节点，最快）
   python ipow.py --rounds 3          # 订阅路径多轮（收集移动池域名变体）
   python ipow.py --p2p-wallets 2     # 配额撞墙后换 2 个新钱包接着跑剩余节点
   python ipow.py --strict            # hysteria2 也要求 TLS 握手成功（默认只按 TCP 判定）
+  python ipow.py --pure-crypto       # 强制内置纯 Python 密码学（先 --selftest 校验再放心用）
+  python ipow.py --selftest          # 只跑密码学自检后退出（内置向量 + 与库交叉校验）
+  python ipow.py --emit-configs      # 额外生成 Clash 代理组 / sing-box outbounds（手机导入用）
+  python ipow.py --out-dir /sdcard/Download   # 输出目录；Termux 上直接扔进下载区
   环境变量 IPOW_BASE_URL 可把 API 指向中转地址
 """
 import argparse
@@ -59,11 +72,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 
-from eth_account import Account
-from eth_account.messages import encode_defunct
+# eth_account / cryptography 是可选加速项；缺失时自动使用下方内置纯 Python 实现
 
 # GitHub Actions 里 Secret 没配时环境变量是空串，不能当成地址用
 BASE = (os.environ.get("IPOW_BASE_URL") or "").strip().rstrip("/") or "https://ipow.ai"
@@ -103,6 +115,416 @@ def log(msg):
 def b64d(s):
     s = s.replace("-", "+").replace("_", "/")
     return base64.b64decode(s + "=" * (-len(s) % 4))
+
+
+# ---------------------------------------------------------------- 纯标准库密码学
+
+# ================================================================
+# 内置纯标准库密码学（移植自用户提供的 Termux 版 ipow 脚本）
+# Termux/无 pip 环境零依赖可用；装了 eth_account / cryptography 时自动用库加速。
+# ================================================================
+try:
+    from eth_account import Account as _LibAccount
+    from eth_account.messages import encode_defunct as _lib_encode_defunct
+    _HAVE_ETH = True
+except Exception:
+    _LibAccount = None
+    _lib_encode_defunct = None
+    _HAVE_ETH = False
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _LibAESGCM
+    _HAVE_AES = True
+except Exception:
+    _LibAESGCM = None
+    _HAVE_AES = False
+
+_PURE_CRYPTO = False            # --pure-crypto 时置 True，强制走内置实现
+
+
+def _use_lib_eth():
+    return _HAVE_ETH and not _PURE_CRYPTO
+
+
+def _use_lib_aes():
+    return _HAVE_AES and not _PURE_CRYPTO
+
+
+def crypto_engine_name():
+    return "eth:%s aes:%s%s" % ("lib" if _use_lib_eth() else "pure",
+                                "lib" if _use_lib_aes() else "pure",
+                                " (--pure-crypto)" if _PURE_CRYPTO else "")
+
+
+def new_wallet():
+    """返回 (private_key_hex, address)。"""
+    if _use_lib_eth():
+        acct = _LibAccount.create()
+        return acct.key.hex(), acct.address
+    priv = os.urandom(32)
+    return priv.hex(), _pure_private_key_to_address(priv)
+
+
+def sign_message(private_key_hex, message):
+    """EIP-191 personal_sign，返回 0x 开头的 65 字节签名（r||s||v）。"""
+    if _use_lib_eth():
+        acct = _LibAccount.from_key(private_key_hex)
+        sig = acct.sign_message(_lib_encode_defunct(text=message))
+        return "0x" + sig.signature.hex()
+    return _pure_sign_personal_message(private_key_hex, message)
+
+
+def _keccak_256(data):
+    state = [[0] * 5 for _ in range(5)]
+    RC = [
+        0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000,
+        0x000000000000808B, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+        0x000000000000008A, 0x0000000000000088, 0x0000000080008009, 0x000000008000000A,
+        0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003,
+        0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
+        0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+    ]
+    r_rot = [
+        [0, 36, 3, 41, 18],
+        [1, 44, 10, 45, 2],
+        [62, 6, 43, 15, 61],
+        [28, 55, 25, 21, 56],
+        [27, 20, 39, 8, 14],
+    ]
+    rate = 136
+    pad_len = rate - (len(data) % rate)
+    padded = data + (b'\x81' if pad_len == 1 else b'\x01' + b'\x00' * (pad_len - 2) + b'\x80')
+
+    def rotl64(x, n):
+        return ((x << (n % 64)) | (x >> (64 - (n % 64)))) & 0xFFFFFFFFFFFFFFFF
+
+    for offset in range(0, len(padded), rate):
+        block = padded[offset:offset + rate]
+        for i in range(17):
+            val = int.from_bytes(block[i * 8:(i + 1) * 8], 'little')
+            state[i % 5][i // 5] ^= val
+
+        for round_idx in range(24):
+            C = [state[x][0] ^ state[x][1] ^ state[x][2] ^ state[x][3] ^ state[x][4] for x in range(5)]
+            D = [C[(x + 4) % 5] ^ rotl64(C[(x + 1) % 5], 1) for x in range(5)]
+            for x in range(5):
+                for y in range(5):
+                    state[x][y] ^= D[x]
+
+            B = [[0] * 5 for _ in range(5)]
+            for x in range(5):
+                for y in range(5):
+                    B[y][(2 * x + 3 * y) % 5] = rotl64(state[x][y], r_rot[x][y])
+
+            for x in range(5):
+                for y in range(5):
+                    state[x][y] = B[x][y] ^ ((~B[(x + 1) % 5][y]) & B[(x + 2) % 5][y])
+
+            state[0][0] ^= RC[round_idx]
+
+    out = bytearray()
+    for i in range(4):
+        val = state[i % 5][i // 5]
+        out.extend(val.to_bytes(8, 'little'))
+    return bytes(out)
+
+
+# ---------------------------------------------------------------- secp256k1（纯 Python）
+_SECP_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+_SECP_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_SECP_G = (
+    0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+    0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+)
+
+
+def _point_add(p1, p2):
+    if p1 is None:
+        return p2
+    if p2 is None:
+        return p1
+    x1, y1 = p1
+    x2, y2 = p2
+    if x1 == x2 and y1 != y2:
+        return None
+    if x1 == x2:
+        m = (3 * x1 * x1 * pow(2 * y1, _SECP_P - 2, _SECP_P)) % _SECP_P
+    else:
+        m = ((y2 - y1) * pow(x2 - x1, _SECP_P - 2, _SECP_P)) % _SECP_P
+    x3 = (m * m - x1 - x2) % _SECP_P
+    y3 = (m * (x1 - x3) - y1) % _SECP_P
+    return (x3, y3)
+
+
+def _point_mul(p, k):
+    res = None
+    curr = p
+    while k:
+        if k & 1:
+            res = _point_add(res, curr)
+        curr = _point_add(curr, curr)
+        k >>= 1
+    return res
+
+
+def _pure_private_key_to_address(priv_bytes):
+    if isinstance(priv_bytes, str):
+        raw_hex = priv_bytes[2:] if priv_bytes.startswith('0x') else priv_bytes
+        priv_bytes = bytes.fromhex(raw_hex)
+    k = int.from_bytes(priv_bytes, 'big')
+    if not (1 <= k < _SECP_N):
+        raise ValueError("Invalid private key")
+    pt = _point_mul(_SECP_G, k)
+    pub_uncompressed = pt[0].to_bytes(32, 'big') + pt[1].to_bytes(32, 'big')
+    addr_hash = _keccak_256(pub_uncompressed)
+    return '0x' + addr_hash[12:].hex()
+
+
+def _pure_sign_personal_message(priv_bytes, message):
+    if isinstance(priv_bytes, str):
+        raw_hex = priv_bytes[2:] if priv_bytes.startswith('0x') else priv_bytes
+        priv_bytes = bytes.fromhex(raw_hex)
+    msg_bytes = message.encode('utf-8')
+    prefix = ("\x19Ethereum Signed Message:\n%d" % len(msg_bytes)).encode('utf-8')
+    h = _keccak_256(prefix + msg_bytes)
+    e = int.from_bytes(h, 'big')
+    d = int.from_bytes(priv_bytes, 'big')
+
+    k_seed = _keccak_256(priv_bytes + h)
+    k = (int.from_bytes(k_seed, 'big') % (_SECP_N - 1)) + 1
+
+    pt = _point_mul(_SECP_G, k)
+    r = pt[0] % _SECP_N
+    s = (pow(k, _SECP_N - 2, _SECP_N) * (e + r * d)) % _SECP_N
+    recid = pt[1] & 1
+    if s > _SECP_N // 2:
+        s = _SECP_N - s
+        recid ^= 1
+    v = 27 + recid
+
+    return '0x' + r.to_bytes(32, 'big').hex() + s.to_bytes(32, 'big').hex() + bytes([v]).hex()# ---------------------------------------------------------------- AES-256-GCM（纯 Python，解密用）
+_AES_SBOX = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+]
+_RCON = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
+
+
+def _aes_key_expansion(key):
+    nk = len(key) // 4
+    nr = nk + 6
+    w = list(key)
+    i = nk
+    while i < 4 * (nr + 1):
+        temp = w[(i - 1) * 4: i * 4]
+        if i % nk == 0:
+            temp = [_AES_SBOX[temp[1]], _AES_SBOX[temp[2]], _AES_SBOX[temp[3]], _AES_SBOX[temp[0]]]
+            temp[0] ^= _RCON[i // nk]
+        elif nk > 6 and i % nk == 4:
+            temp = [_AES_SBOX[b] for b in temp]
+        for j in range(4):
+            w.append(w[(i - nk) * 4 + j] ^ temp[j])
+        i += 1
+    return bytes(w), nr
+
+
+def _xtime(a):
+    return ((a << 1) ^ 0x1B) & 0xFF if (a & 0x80) else (a << 1)
+
+
+def _aes_encrypt_block(block, w, nr):
+    state = list(block)
+    for i in range(16):
+        state[i] ^= w[i]
+    for round_idx in range(1, nr):
+        state = [_AES_SBOX[b] for b in state]
+        s0, s4, s8, s12 = state[0], state[4], state[8], state[12]
+        s1, s5, s9, s13 = state[5], state[9], state[13], state[1]
+        s2, s6, s10, s14 = state[10], state[14], state[2], state[6]
+        s3, s7, s11, s15 = state[15], state[3], state[7], state[11]
+        for c, (r0, r1, r2, r3) in enumerate(
+                [(s0, s1, s2, s3), (s4, s5, s6, s7), (s8, s9, s10, s11), (s12, s13, s14, s15)]):
+            t = r0 ^ r1 ^ r2 ^ r3
+            state[c * 4] = r0 ^ t ^ _xtime(r0 ^ r1)
+            state[c * 4 + 1] = r1 ^ t ^ _xtime(r1 ^ r2)
+            state[c * 4 + 2] = r2 ^ t ^ _xtime(r2 ^ r3)
+            state[c * 4 + 3] = r3 ^ t ^ _xtime(r3 ^ r0)
+        round_key = w[round_idx * 16:(round_idx + 1) * 16]
+        for i in range(16):
+            state[i] ^= round_key[i]
+    state = [_AES_SBOX[b] for b in state]
+    state = [
+        state[0], state[5], state[10], state[15],
+        state[4], state[9], state[14], state[3],
+        state[8], state[13], state[2], state[7],
+        state[12], state[1], state[6], state[11]
+    ]
+    round_key = w[nr * 16:(nr + 1) * 16]
+    for i in range(16):
+        state[i] ^= round_key[i]
+    return bytes(state)
+
+
+def _ghash(h_bytes, data):
+    h = int.from_bytes(h_bytes, 'big')
+    r = 0xE1000000000000000000000000000000
+    y = 0
+    for i in range(0, len(data), 16):
+        x = int.from_bytes(data[i:i + 16], 'big')
+        v = y ^ x
+        z = 0
+        for bit in range(128):
+            if (h >> (127 - bit)) & 1:
+                z ^= v
+            if v & 1:
+                v = (v >> 1) ^ r
+            else:
+                v >>= 1
+        y = z
+    return y.to_bytes(16, 'big')
+
+
+def _pure_aes_gcm_decrypt(key, nonce, ct_and_tag, aad=b''):
+    if len(nonce) != 12:
+        raise ValueError('Nonce 长度必须为 12 字节')
+    if len(ct_and_tag) < 16:
+        raise ValueError('密文长度不足(缺少 Tag)')
+    ct = ct_and_tag[:-16]
+    expected_tag = ct_and_tag[-16:]
+
+    w, nr = _aes_key_expansion(key)
+    h_bytes = _aes_encrypt_block(b'\x00' * 16, w, nr)
+
+    j0 = nonce + b'\x00\x00\x00\x01'
+    j0_enc = _aes_encrypt_block(j0, w, nr)
+
+    pad_aad = aad + b'\x00' * (-len(aad) % 16)
+    pad_ct = ct + b'\x00' * (-len(ct) % 16)
+    len_blk = (len(aad) * 8).to_bytes(8, 'big') + (len(ct) * 8).to_bytes(8, 'big')
+    ghash_data = pad_aad + pad_ct + len_blk
+
+    ghash_out = _ghash(h_bytes, ghash_data)
+    computed_tag = bytes(a ^ b for a, b in zip(ghash_out, j0_enc))
+    if computed_tag != expected_tag:
+        raise ValueError('GCM 校验标签不匹配')
+
+    counter = 2
+    pt = bytearray()
+    for i in range(0, len(ct), 16):
+        cb = nonce + counter.to_bytes(4, 'big')
+        ks = _aes_encrypt_block(cb, w, nr)
+        block = ct[i:i + 16]
+        pt.extend(bytes(a ^ b for a, b in zip(block, ks[:len(block)])))
+        counter += 1
+    return bytes(pt)
+
+
+# ---------------------------------------------------------------- 自检 / 小工具
+
+def is_ipv4(addr):
+    if not addr or not isinstance(addr, str):
+        return False
+    parts = addr.strip().split(".")
+    if len(parts) != 4:
+        return False
+    for p in parts:
+        if not p.isdigit() or not (0 <= int(p) <= 255):
+            return False
+    return True
+
+
+_SELFTEST_VEC = {
+    "keccak_empty": "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+    "keccak_abc": "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
+    "address_of_one": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "sign_message": "iPoW selftest message",
+    "sign_of_one": ("0xf4520b3331528fd9277030c8655632ac35eec4b4d6f1d058eed1a421b1baf6c3"
+                    "37a756a1a1f54d7004741cb3880437c647f66fd8b42763cbe1fb834e94018a1b1c"),
+    "aes_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "aes_nonce": "000102030405060708090a0b",
+    "aes_ct": ("2e52b94ce584a768a026f4e6919a1d01e5a2e247845b29195b138af77160e43d"
+               "5c0e62806a81cda8c234420a"),
+    "aes_pt": "iPoW aes-gcm selftest vector",
+}
+
+
+def run_selftest():
+    """内置固定向量（零依赖可跑）+ 有库时随机样例交叉验证。返回进程退出码。"""
+    fails = []
+
+    def check(name, cond, detail=""):
+        print("[%s] %s%s" % ("OK" if cond else "FAIL", name,
+                             (" " + str(detail)) if (detail and not cond) else ""))
+        if not cond:
+            fails.append(name)
+
+    v = _SELFTEST_VEC
+    check("keccak('') 固定向量", _keccak_256(b"").hex() == v["keccak_empty"])
+    check("keccak('abc') 固定向量", _keccak_256(b"abc").hex() == v["keccak_abc"])
+    pk1 = bytes.fromhex("00" * 31 + "01")
+    check("priv=1 地址派生", _pure_private_key_to_address(pk1).lower() == v["address_of_one"])
+    sig1 = _pure_sign_personal_message(pk1, v["sign_message"])
+    check("EIP-191 签名固定向量", sig1 == v["sign_of_one"], sig1)
+    pt = _pure_aes_gcm_decrypt(bytes.fromhex(v["aes_key"]), bytes.fromhex(v["aes_nonce"]),
+                               bytes.fromhex(v["aes_ct"]), b"")
+    check("AES-256-GCM 固定向量", pt.decode() == v["aes_pt"])
+    try:
+        bad = bytearray(bytes.fromhex(v["aes_ct"]))
+        bad[-1] ^= 1
+        _pure_aes_gcm_decrypt(bytes.fromhex(v["aes_key"]), bytes.fromhex(v["aes_nonce"]),
+                              bytes(bad), b"")
+        check("GCM 篡改检测", False, "改了 tag 竟然没报错")
+    except ValueError:
+        check("GCM 篡改检测", True)
+
+    if _HAVE_ETH:
+        ok = True
+        for _ in range(3):
+            pk = os.urandom(32)
+            try:
+                ok = ok and _pure_private_key_to_address(pk).lower() == _LibAccount.from_key(pk).address.lower()
+            except Exception:
+                ok = False
+        check("随机 3 键：纯地址派生 vs eth_account", ok)
+        try:
+            rec = _LibAccount.recover_message(_lib_encode_defunct(text=v["sign_message"]),
+                                              signature=sig1)
+            check("纯签名经 eth_account 回收一致", rec.lower() == v["address_of_one"])
+        except Exception as exc:
+            check("纯签名经 eth_account 回收一致", False, str(exc)[:80])
+    try:
+        import eth_utils as _eu
+        data = os.urandom(64)
+        check("随机 keccak vs eth_utils", _keccak_256(data).hex() == _eu.keccak(data).hex())
+    except Exception:
+        pass
+    if _HAVE_AES:
+        ok = True
+        for _ in range(3):
+            k, n, p = os.urandom(32), os.urandom(12), os.urandom(123)
+            try:
+                ok = ok and _pure_aes_gcm_decrypt(k, n, _LibAESGCM(k).encrypt(n, p, None), b"") == p
+            except Exception:
+                ok = False
+        check("随机 3 组：纯 GCM 解密 vs cryptography", ok)
+
+    print("engine: %s" % crypto_engine_name())
+    print("结果: %s" % ("全部通过" if not fails else "失败 %d 项: %s" % (len(fails), ", ".join(fails))))
+    return 1 if fails else 0
 
 
 # ---------------------------------------------------------------- HTTP 层
@@ -262,28 +684,42 @@ class TransientError(RuntimeError):
 
 # ---------------------------------------------------------------- 账号
 
-def login(http, rec):
-    st, ch = http.request("POST", "/v1/auth/wallet/challenge", body={"address": rec["address"]})
-    acct = Account.from_key(rec["private_key"])
-    sig = acct.sign_message(encode_defunct(text=ch["message"]))
-    st, vr = http.request("POST", "/v1/auth/wallet/verify",
-                          body={"address": rec["address"], "signature": "0x" + sig.signature.hex(),
-                                "nonce": ch["nonce"]})
-    return vr["token"], vr.get("subscription") or {}
+def login(http, rec, tries=3):
+    """challenge -> EIP-191 签名 -> verify。
+
+    服务端偶发把单个请求拖到几十秒，个别时候 verify 会吃 challenge_expired 或瞬时 5xx；
+    整个流程最多重试 tries 次（每次重新拿 challenge），最终仍失败时带原因抛错。
+    """
+    last = None
+    for attempt in range(tries):
+        if attempt:
+            time.sleep(1.0)
+        st, ch = http.request("POST", "/v1/auth/wallet/challenge", body={"address": rec["address"]})
+        if st != 200 or not isinstance(ch, dict) or not ch.get("message"):
+            last = "challenge %s %s" % (st, str(ch)[:100])
+            continue
+        sig = sign_message(rec["private_key"], ch["message"])
+        st, vr = http.request("POST", "/v1/auth/wallet/verify",
+                              body={"address": rec["address"], "signature": sig,
+                                    "nonce": ch.get("nonce")})
+        if st == 200 and isinstance(vr, dict) and vr.get("token"):
+            return vr["token"], vr.get("subscription") or {}
+        last = "verify %s %s" % (st, str(vr)[:120])
+    raise RuntimeError("登录失败: %s" % last)
 
 
 def register_new(http, bind_code):
-    acct = Account.create()
-    addr = acct.address
+    priv, addr = new_wallet()
     device_id = os.urandom(8).hex()
     st, ch = http.request("POST", "/v1/auth/wallet/challenge", body={"address": addr})
-    sig = acct.sign_message(encode_defunct(text=ch["message"]))
+    sig = sign_message(priv, ch["message"])
     st, vr = http.request("POST", "/v1/auth/wallet/verify",
-                          body={"address": addr, "signature": "0x" + sig.signature.hex(),
-                                "nonce": ch["nonce"]})
+                          body={"address": addr, "signature": sig, "nonce": ch.get("nonce")})
+    if st != 200 or not isinstance(vr, dict) or not vr.get("token"):
+        raise RuntimeError("注册失败: http %s %s" % (st, str(vr)[:140]))
     token = vr["token"]
-    rec = {"address": addr, "private_key": acct.key.hex(), "device_id": device_id,
-           "user_id": vr["user"]["id"],
+    rec = {"address": addr, "private_key": priv, "device_id": device_id,
+           "user_id": (vr.get("user") or {}).get("id"),
            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     if bind_code:
         st, bd = http.request("POST", "/v1/me/referral/bind", token=token,
@@ -297,7 +733,7 @@ def register_new(http, bind_code):
         os.chmod(path, 0o600)
     except OSError:
         pass
-    return rec, token
+    return rec, token, vr.get("subscription") or {}
 
 
 def account_expired(sub):
@@ -322,8 +758,10 @@ def load_usable_account(http, bind_code, try_count=6, workers=4):
     if recs:
         with ThreadPoolExecutor(max_workers=min(workers, len(recs))) as ex:
             futs = {ex.submit(login, http, r): r for r in recs}
-            done, pending = wait(futs, timeout=http.timeout * 2)
+            # 服务端偶发把单个请求拖到 50s+；给足余量，别把还在跑的登录当失败
+            done, pending = wait(futs, timeout=max(150.0, http.timeout * 6))
             for f in pending:
+                log("[account] 登录超时未返回，跳过该账号")
                 f.cancel()
             for f in done:
                 rec = futs[f]
@@ -338,11 +776,19 @@ def load_usable_account(http, bind_code, try_count=6, workers=4):
                     if prev is None or rank < prev:
                         hit = {"rank": rank, "rec": rec, "token": token, "sub": sub}
                         log("[account] reuse %s (active until %s)" % (rec["address"], sub.get("expires_at", "")))
+                else:
+                    log("[account] %s status=%s expires=%s，跳过"
+                        % (rec["address"], sub.get("status"), sub.get("expires_at", "")))
     if hit:
         return hit["rec"], hit["token"], hit["sub"]
     log("[account] registering new account...")
-    rec, token = register_new(http, bind_code)
-    token, sub = login(http, rec)
+    rec, token, sub = register_new(http, bind_code)
+    if sub.get("status") != "active":
+        # 注册响应偶尔（出口被批或激活延迟）直接给 inactive，紧接着复查登录一次通常就 active
+        try:
+            token, sub = login(http, rec)
+        except Exception as exc:
+            log("[account] 注册后复查登录失败: %s" % str(exc)[:120])
     log("[account] new: %s" % rec["address"])
     return rec, token, sub
 
@@ -491,9 +937,14 @@ def node_uri(n, name=None):
         return "vless://%s@%s:%s?%s#%s" % (n["uuid"], n["server"], n["port"], q,
                                            urllib.parse.quote(str(tag), safe=""))
     if n["type"] == "hysteria2":
-        return "hysteria2://%s@%s:%s/?sni=%s#%s" % (
-            n["password"], n["server"], n["port"],
-            urllib.parse.quote(n.get("sni") or n["server"], safe=""),
+        # SNI 必须是域名：官方订阅里 hy2 的 server_name 直接是物理 IP，
+        # 客户端拿 IP 当 SNI 会握手异常 —— 是 IP 就不带 sni 参数、统一 insecure=1
+        q = "insecure=1"
+        sni = str(n.get("sni") or "")
+        if sni and not is_ipv4(sni):
+            q += "&sni=" + urllib.parse.quote(sni, safe="")
+        return "hysteria2://%s@%s:%s/?%s#%s" % (
+            n["password"], n["server"], n["port"], q,
             urllib.parse.quote(str(tag), safe=""))
     return None
 
@@ -542,16 +993,17 @@ def parse_sub_nodes(conf):
 
 
 def sub_pull(http, token, rec, sub_url, country, client_type, rounds, collector, store,
-             sid0=None, quiet=False):
-    """订阅路径：session_id 决定拉到哪一份配置；首轮复用已建好的 session，避免互踢。"""
+             quiet=False):
+    """订阅路径：必须“建完 session 立刻拉配置”。
+
+    服务端 device_limit=2：同一设备只有最近两个 session 有效，新建会顶掉最老的。
+    所以每个 client_type（每一轮）都现场建 session 并马上拉取，不能先批量建再拉。
+    """
     for i in range(rounds):
-        if i == 0 and sid0:
-            sid = sid0
-        else:
-            sid, ss = start_session(http, token, rec["device_id"], country, client_type)
-            if not sid:
-                log("[sub:%s r%d] session failed: %s" % (client_type, i + 1, str(ss)[:140]))
-                continue
+        sid, ss = start_session(http, token, rec["device_id"], country, client_type)
+        if not sid:
+            log("[sub:%s r%d] session failed: %s" % (client_type, i + 1, str(ss)[:140]))
+            continue
         st, conf = http.request("GET", sub_url + "?session_id=" + sid, retries=6)
         if st != 200 or not isinstance(conf, dict) or "outbounds" not in conf:
             log("[sub:%s r%d] config fetch failed(%s): %s"
@@ -619,18 +1071,32 @@ def decrypt_profile(resp):
     key_str = keys.get(ep.get("key_id")) or resp.get("profile_decryption_key")
     if not key_str:
         raise ValueError("no decryption key")
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    pt = AESGCM(b64d(key_str)).decrypt(b64d(ep["nonce"]), b64d(ep["ciphertext"]), None)
+    key_b, nonce_b, ct_b = b64d(key_str), b64d(ep["nonce"]), b64d(ep["ciphertext"])
+    if _use_lib_aes():
+        pt = _LibAESGCM(key_b).decrypt(nonce_b, ct_b, None)
+    else:
+        pt = _pure_aes_gcm_decrypt(key_b, nonce_b, ct_b, b"")
     return json.loads(pt.decode("utf-8", "replace"))
 
 
-def node_from_capability(prof):
+def node_from_capability(resp):
+    """把 capability 响应转成节点；顺带从 signed_record 里取延迟/城市等元信息。"""
+    prof = decrypt_profile(resp)
     tls = prof.get("tls") or {}
-    return {"type": "vless", "source": "p2p", "tag": prof.get("tag"), "server": prof.get("server"),
+    node = {"type": "vless", "source": "p2p", "tag": prof.get("tag"), "server": prof.get("server"),
             "port": prof.get("server_port"), "uuid": prof.get("uuid"), "flow": prof.get("flow") or "",
             "sni": tls.get("server_name"), "fp": (tls.get("utls") or {}).get("fingerprint"),
             "pbk": (tls.get("reality") or {}).get("public_key"),
             "sid": (tls.get("reality") or {}).get("short_id")}
+    payload = (resp.get("signed_record") or {}).get("payload") or {}
+    if isinstance(payload, dict):
+        if payload.get("latency_ms") is not None:
+            node["latency_ms"] = payload.get("latency_ms")
+        if payload.get("region"):
+            node["region_slug"] = payload.get("region")
+        if payload.get("city"):
+            node["city"] = payload.get("city")
+    return node
 
 
 def capability_one(http, token, sid, sub_token, device_id, nid, cc, throttle):
@@ -703,7 +1169,7 @@ def scrape_nodes(http, token, rec, sid, sub_token, items, collector, throttle,
                 log("[%s %2d/%d] %-30s -> %s" % (label, idx + 1, len(items), nid, err))
                 return
             try:
-                node = node_from_capability(decrypt_profile(cap))
+                node = node_from_capability(cap)
             except Exception as exc:
                 skip += 1
                 log("[%s %2d/%d] %-30s decrypt fail: %s" % (label, idx + 1, len(items), nid, exc))
@@ -804,6 +1270,94 @@ def apply_names(nodes, cat_info):
     nodes.sort(key=lambda n: (n.get("region") or "", n.get("name") or ""))
 
 
+# ---------------------------------------------------------------- 配置生成（--emit-configs）
+
+def _nport(n):
+    try:
+        return int(n.get("port") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stag(n):
+    return str(n.get("name") or n.get("tag") or n.get("server") or "node").replace("'", "")
+
+
+def build_clash_yaml(nodes):
+    lines = ["# iPoWVPN nodes (Clash Meta / Mihomo)", "proxies:"]
+    for n in nodes:
+        name = _stag(n)
+        lines.append("  - name: '%s'" % name)
+        if n["type"] == "hysteria2":
+            lines.append("    type: hysteria2")
+            lines.append("    server: %s" % n.get("server"))
+            lines.append("    port: %s" % _nport(n))
+            lines.append("    password: %s" % (n.get("password") or ""))
+            sni = str(n.get("sni") or "")
+            if sni and not is_ipv4(sni):
+                lines.append("    sni: %s" % sni)
+            lines.append("    skip-cert-verify: true")
+            lines.append("    udp: true")
+            continue
+        lines.append("    type: vless")
+        lines.append("    server: %s" % n.get("server"))
+        lines.append("    port: %s" % _nport(n))
+        lines.append("    uuid: %s" % (n.get("uuid") or ""))
+        lines.append("    network: tcp")
+        if n.get("flow"):
+            lines.append("    flow: %s" % n["flow"])
+        lines.append("    tls: true")
+        lines.append("    udp: true")
+        lines.append("    servername: %s" % (n.get("sni") or "www.cloudflare.com"))
+        lines.append("    client-fingerprint: %s" % (n.get("fp") or "chrome"))
+        lines.append("    reality-opts:")
+        lines.append("      public-key: '%s'" % (n.get("pbk") or ""))
+        lines.append("      short-id: '%s'" % (n.get("sid") or ""))
+    return "\n".join(lines) + "\n"
+
+
+def build_singbox_json(nodes):
+    outbounds = []
+    for n in nodes:
+        tag = _stag(n)
+        if n["type"] == "hysteria2":
+            tls = {"enabled": True, "insecure": True}
+            sni = str(n.get("sni") or "")
+            if sni and not is_ipv4(sni):
+                tls["server_name"] = sni
+            outbounds.append({"type": "hysteria2", "tag": tag, "server": n.get("server"),
+                              "server_port": _nport(n), "password": n.get("password") or "",
+                              "tls": tls})
+            continue
+        ob = {"type": "vless", "tag": tag, "server": n.get("server"), "server_port": _nport(n),
+              "uuid": n.get("uuid") or "", "packet_encoding": "xudp",
+              "tls": {"enabled": True, "server_name": n.get("sni") or "www.cloudflare.com",
+                      "utls": {"enabled": True, "fingerprint": n.get("fp") or "chrome"},
+                      "reality": {"enabled": True, "public_key": n.get("pbk") or "",
+                                  "short_id": n.get("sid") or ""}}}
+        if n.get("flow"):
+            ob["flow"] = n["flow"]
+        outbounds.append(ob)
+    return {"outbounds": outbounds}
+
+
+def emit_configs(nodes, probe, out_dir):
+    """写 clash_proxies.yaml / singbox_proxies.json；可达节点排前面。"""
+    ordered = list(nodes)
+    if probe is not None:
+        reach_ids = {id(n) for n in ordered
+                     if probe.reachable(n["server"], _nport(n), n["type"] != "hysteria2")}
+        ordered = ([n for n in ordered if id(n) in reach_ids]
+                   + [n for n in ordered if id(n) not in reach_ids])
+    path_yaml = os.path.join(out_dir, "clash_proxies.yaml")
+    path_sb = os.path.join(out_dir, "singbox_proxies.json")
+    with open(path_yaml, "w", encoding="utf-8") as f:
+        f.write(build_clash_yaml(ordered))
+    with open(path_sb, "w", encoding="utf-8") as f:
+        json.dump(build_singbox_json(ordered), f, ensure_ascii=False, indent=1)
+    log("[out] clash_proxies.yaml / singbox_proxies.json <- %d nodes（可达优先）" % len(ordered))
+
+
 # ---------------------------------------------------------------- 主流程
 
 def parse_args(argv=None):
@@ -813,7 +1367,7 @@ def parse_args(argv=None):
     ap.add_argument("--bind-code", default="849a64")
     ap.add_argument("--base-url", default=BASE,
                     help="API 地址，默认 https://ipow.ai；出口被风控时指向 cf_relay.mjs 中转")
-    ap.add_argument("--client-types", default="windows,android")
+    ap.add_argument("--client-types", default="windows,android,ios")
     ap.add_argument("--no-probe", action="store_true", help="跳过可达筛查")
     ap.add_argument("--skip-p2p", action="store_true", help="跳过 P2P capability 路径")
     ap.add_argument("--concurrency", type=int, default=4, help="capability 并发度")
@@ -835,6 +1389,13 @@ def parse_args(argv=None):
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--links-scope", choices=["reachable", "all"], default="reachable",
                     help="iPoW.txt 的内容范围：reachable=只写探得通的（默认），all=全量节点")
+    ap.add_argument("--pure-crypto", action="store_true",
+                    help="强制使用内置纯 Python 密码学实现（零依赖路径；默认有库就用库）")
+    ap.add_argument("--selftest", action="store_true", help="只做密码学自检后退出")
+    ap.add_argument("--emit-configs", action="store_true",
+                    help="额外生成 clash_proxies.yaml / singbox_proxies.json（手机导入用）")
+    ap.add_argument("--out-dir", default=None,
+                    help="输出目录（默认 脚本目录/out；Termux 上可指向 /sdcard/Download）")
     return ap.parse_args(argv)
 
 
@@ -856,9 +1417,15 @@ def print_stats(http, t0, no_stats=False):
 
 def main(argv=None):
     args = parse_args(argv)
+    global _PURE_CRYPTO
+    _PURE_CRYPTO = bool(args.pure_crypto)
+    if args.selftest:
+        sys.exit(run_selftest())
     t0 = time.monotonic()
-    os.makedirs(OUT, exist_ok=True)
+    out_dir = os.path.abspath(args.out_dir) if args.out_dir else OUT
+    os.makedirs(out_dir, exist_ok=True)
     os.makedirs(STATE, exist_ok=True)
+    log("[crypto] engine=%s" % crypto_engine_name())
 
     base = (args.base_url or "").strip() or BASE
     if base != "https://ipow.ai":
@@ -879,28 +1446,6 @@ def main(argv=None):
         log("[account] 订阅不是 active：出口 IP 被风控时新注册的号会直接是 inactive/phase1，"
             "capability 会回 402 subscription_inactive。换出口 IP 再跑（IPOW_BASE_URL 可指向中转）。")
     client_types = [c.strip() for c in args.client_types.split(",") if c.strip()]
-    needed = list(dict.fromkeys(client_types + ([] if args.skip_p2p else [P2P_CLIENT_TYPE])))
-
-    # 不同 client_type 的 session 实测不互踢（device_limit=2），并发建；
-    # 同一个 client_type 再建才会踢掉前一个，所以采集阶段不再重建 session
-    sessions = {}
-    with ThreadPoolExecutor(max_workers=min(len(needed), 2) or 1) as ex:
-        futs = {ex.submit(start_session, http, token, rec["device_id"], args.country, ct): ct
-                for ct in needed}
-        for f in as_completed(futs):
-            ct = futs[f]
-            try:
-                sid, ss = f.result()
-            except Exception as exc:
-                log("[session:%s] 异常: %s" % (ct, str(exc)[:140]))
-                continue
-            if sid:
-                sessions[ct] = sid
-            else:
-                log("[session:%s] failed: %s" % (ct, str(ss)[:140]))
-    if not sessions:
-        log("no session available")
-        sys.exit(2)
 
     sub_url, sub_token = get_sub_url(http, token)
     if not sub_url:
@@ -912,14 +1457,15 @@ def main(argv=None):
     def run_sub(ct):
         try:
             sub_pull(http, token, rec, sub_url, args.country, ct, args.rounds, collector, store,
-                     sid0=sessions.get(ct), quiet=args.quiet)
+                     quiet=args.quiet)
         except Exception as exc:
             log("[sub:%s] 阶段异常: %s: %s" % (ct, type(exc).__name__, exc))
 
     def run_p2p():
-        sid = sessions.get(P2P_CLIENT_TYPE)
+        # P2P 单独现场建 session：前面的订阅 session 大概率已被顶掉（device_limit=2）
+        sid, ss = start_session(http, token, rec["device_id"], args.country, P2P_CLIENT_TYPE)
         if not sid:
-            log("[p2p] 没有 %s session，跳过" % P2P_CLIENT_TYPE)
+            log("[p2p] 建 %s session 失败: %s" % (P2P_CLIENT_TYPE, str(ss)[:140]))
             return
         try:
             _ok, _skip, todo = run_p2p_phase(http, args, token, rec, sid, sub_token,
@@ -931,8 +1477,12 @@ def main(argv=None):
                 extra += 1
                 log("[p2p] 换第 %d 个新钱包续跑剩余 %d 个节点" % (extra, len(todo)))
                 try:
-                    rec2, token2 = register_new(http, args.bind_code)
-                    token2, sub2 = login(http, rec2)
+                    rec2, token2, sub2 = register_new(http, args.bind_code)
+                    if sub2.get("status") != "active":
+                        try:
+                            token2, sub2 = login(http, rec2)   # 注册响应可能慢一拍，复查一次
+                        except Exception as exc:
+                            log("[p2p] 新号复查登录失败: %s" % str(exc)[:120])
                     if sub2.get("status") != "active":
                         log("[p2p] 新号 %s 状态 %s（出口被风控时新号直接 inactive），放弃换号"
                             % (rec2["address"], sub2.get("status")))
@@ -958,20 +1508,12 @@ def main(argv=None):
         except Exception as exc:
             log("[p2p] 阶段异常: %s: %s" % (type(exc).__name__, exc))
 
-    jobs = [(ct, (lambda c=ct: run_sub(c))) for ct in client_types if ct in sessions]
-    p2p_job = None if (args.skip_p2p or not sub_token) else run_p2p
-    if args.rounds > 1 and p2p_job is not None:
-        # 多轮会重建 session，P2P 用的 session 可能被踢，只能先跑订阅
-        with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as ex:
-            list(ex.map(lambda item: item[1](), jobs))
-        p2p_job()
-    else:
-        with ThreadPoolExecutor(max_workers=max(len(jobs) + (1 if p2p_job else 0), 1)) as ex:
-            futs = [ex.submit(fn) for _name, fn in jobs]
-            if p2p_job is not None:
-                futs.append(ex.submit(p2p_job))
-            for f in as_completed(futs):
-                f.result()
+    # 订阅阶段严格串行：device_limit=2，各 client_type 的 session 互相顶，
+    # 每个类型“建完立刻拉”才拿得到配置；P2P 在订阅全部完成后另建 session 再跑
+    for ct in client_types:
+        run_sub(ct)
+    if not args.skip_p2p and sub_token:
+        run_p2p()
 
     nodes = collector.values()
     if not nodes:
@@ -992,14 +1534,14 @@ def main(argv=None):
             % (len(snap), len(servers), sum(1 for r in snap.values() if r["tcp"]),
                sum(1 for r in snap.values() if r["tls"])))
 
-    with open(os.path.join(OUT, "all_nodes.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_dir, "all_nodes.json"), "w", encoding="utf-8") as f:
         json.dump({"generated_at": ts, "account": rec["address"], "node_count": len(nodes),
                    "nodes": nodes}, f, ensure_ascii=False, indent=1)
     uris = [u for u in (node_uri(n, n.get("name")) for n in nodes) if u]
-    with open(os.path.join(OUT, "all_uris.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_dir, "all_uris.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(uris) + "\n")
     if store.get("last_conf"):
-        with open(os.path.join(OUT, "singbox_config.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(out_dir, "singbox_config.json"), "w", encoding="utf-8") as f:
             json.dump(store["last_conf"], f, ensure_ascii=False, indent=1)
     print("\nDONE: %d nodes | all_nodes.json, all_uris.txt (%.1fs)" % (len(nodes), time.monotonic() - t0))
 
@@ -1013,9 +1555,9 @@ def main(argv=None):
                   "# servers: %d/%d reachable" % (
                       len({n["server"] for n in r_nodes}), len({n["server"] for n in nodes})),
                   "# nodes: %d/%d" % (len(r_nodes), len(nodes))]
-        with open(os.path.join(OUT, "reachable_uris.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(out_dir, "reachable_uris.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(header + r_uris) + "\n")
-        with open(os.path.join(OUT, "reachable_nodes.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(out_dir, "reachable_nodes.json"), "w", encoding="utf-8") as f:
             json.dump({"generated_at": ts,
                        "probe": {"%s:%d" % k: v for k, v in sorted(probe.snapshot().items())},
                        "node_count": len(r_nodes), "nodes": r_nodes}, f, ensure_ascii=False, indent=1)
@@ -1041,9 +1583,11 @@ def main(argv=None):
     with open(LINKS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(deliver) + "\n")
     print("[out] %s <- %d 条 (scope=%s)" % (os.path.relpath(LINKS_FILE, ROOT), len(deliver), args.links_scope))
+    if args.emit_configs:
+        emit_configs(nodes, probe, out_dir)
     print_stats(http, t0, args.no_stats)
-    print("\nfiles in %s:" % os.path.relpath(OUT, ROOT))
-    for fn in sorted(os.listdir(OUT)):
+    print("\nfiles in %s:" % os.path.relpath(out_dir, ROOT))
+    for fn in sorted(os.listdir(out_dir)):
         print("  ", fn)
 
 
