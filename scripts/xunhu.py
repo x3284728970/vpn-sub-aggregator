@@ -105,9 +105,10 @@ class XunHuExtractor:
 
     def api(self, method: str, path: str, body: Optional[Dict] = None,
             token: Optional[str] = None, timeout: int = 30, retries: int = 3):
-        """带域名轮换与 429 退避的请求；返回 (status, text)，全失败返回 (None, err)。"""
+        """带域名轮换的请求：429 退避、5xx 换域名重试；返回 (status, text)，全失败返回 (None, err)。"""
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        last = None
+        last_err = None
+        last_resp = None
         for i in range(retries):
             base = self._next_host()
             headers = {
@@ -129,11 +130,18 @@ class XunHuExtractor:
                     print(f"   [限流 429] 等待 {wait}s ...", flush=True)
                     time.sleep(wait)
                     continue
+                if r.status_code >= 500:
+                    last_resp = (r.status_code, r.text)
+                    if i < retries - 1:
+                        time.sleep(2)
+                    continue
                 return r.status_code, r.text
             except Exception as e:
-                last = e
+                last_err = e
                 time.sleep(3)
-        return None, repr(last)
+        if last_resp is not None:
+            return last_resp
+        return None, repr(last_err)
 
     # ---------- 注册 ----------
 
