@@ -52,7 +52,7 @@ EXCLUDE_FILES = {
 # 各脚本期望的节点输出文件（用于日志报告）
 EXPECTED_NODE_FILES = {
     "__.py": ["cainiao.txt"],
-    "TF__.py": ["yinhu.txt", "TF__.txt", "foxlink.txt"],
+    "xunhu.py": ["xunhu.txt", "yinhu.txt", "TF__.txt", "foxlink.txt"],
     "Surfer.py": ["surfer.txt", "SF.txt"],
     "de.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "sulianb.txt", "sulianc.txt"],
@@ -329,7 +329,7 @@ def main():
 
     # 依次运行提取脚本
     results = {}
-    results["TF__.py"] = run_script("TF__.py")
+    results["xunhu.py"] = run_script("xunhu.py")
     results["Surfer.py"] = run_script("Surfer.py")
     results["__.py"] = run_script("__.py")
     # fengniao.py 不加（用户自己单独用）

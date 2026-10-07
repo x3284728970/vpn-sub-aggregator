@@ -8,7 +8,7 @@ import urllib.parse
 # 同一个来源可能有多个输出文件名（历史遗留），全部列上。
 FILE_TAGS = {
     "cainiao.txt": "cainiao",
-    "yinhu.txt": "yinhu", "TF__.txt": "yinhu", "foxlink.txt": "yinhu",
+    "xunhu.txt": "xunhu", "yinhu.txt": "xunhu", "TF__.txt": "xunhu", "foxlink.txt": "xunhu",
     "surfer.txt": "SF", "SF.txt": "SF",
     "sulian.txt": "sulian", "sulianb.txt": "sulian", "sulianc.txt": "sulian",
     "nodes.txt": "DE", "devpn.txt": "DE",
@@ -20,7 +20,7 @@ FILE_TAGS = {
 # 脚本名 → 节点名前缀（供 run_script / 文档使用，键是 scripts/ 下的文件名）
 SOURCE_TAGS = {
     "__.py": "cainiao",
-    "TF__.py": "yinhu",
+    "xunhu.py": "xunhu",
     "Surfer.py": "SF",
     "sulian.py": "sulian",
     "de.py": "DE",
