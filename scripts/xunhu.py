@@ -7,8 +7,10 @@
 - 新版（探测脚本）：android 注册（带 app_signing_cert_hash）、v3 接口、多域名轮换、429 退避
 
 实测（2026-10-08）：android 注册 201；v3/v2 proxy_config 均 200 且节点 schema 相同
-（都带 region_code 与 tls_mode）。42 节点 = 21 普通 + 21 黄金；黄金节点凭据为空，
-沿用全零 uuid 兜底、名字带 -Gold 后缀（naming.py 的 KEEP_TAGS 会保留该后缀）。
+（都带 region_code 与 tls_mode）。42 节点 = 21 普通 + 21 黄金。
+实测（2026-10-17）：注册即送 welcome_subscription 试用套餐（2 小时/200MB），但只覆盖
+普通节点 —— 黄金节点 credentials 恒为空（{}），服务端不给试用用户下发 uuid。
+无凭据节点直接跳过，不再全零 uuid 兜底（发出去必 401，纯占订阅）。
 
 产出：xunhu.txt（当前目录），每行一条节点链接。
 """
@@ -43,8 +45,6 @@ SHA256_SIG = "f3a0e39e22368ad5832c9cddc428af47bcd14c7eb3d231561e4351411ee0c46f"
 
 ANDROID_UA = "okhttp/4.12.0"
 IOS_UA = "foxlink/2 CFNetwork/1408.0.4 Darwin/22.5.0"
-
-GOLD_FALLBACK_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def android_register_body() -> Dict:
@@ -221,9 +221,8 @@ class XunHuExtractor:
             frag = quote(name)
 
             if proto == "vless":
+                # 凭据为空就丢弃：黄金节点服务端不下发 uuid，全零兜底发出去必 401
                 uuid_val = cred.get("uuid") or ""
-                if not uuid_val and node_type == "gold":
-                    uuid_val = GOLD_FALLBACK_UUID
                 if not uuid_val:
                     return None
 
@@ -284,9 +283,15 @@ class XunHuExtractor:
 
     def extract_links(self, config: Dict) -> List[str]:
         links: List[str] = []
+        self.skipped_gold = 0
         for country in config.get("countries") or []:
             cc = country.get("code") or ""
             for node in country.get("nodes") or []:
+                # 试用套餐不含黄金节点，服务端不下发凭据 —— 提前跳过并计数
+                if (node.get("node_type") or "").lower() == "gold" \
+                        and not ((node.get("credentials") or {}).get("uuid")):
+                    self.skipped_gold += 1
+                    continue
                 link = self.build_link(node, node.get("region_code") or cc)
                 if link:
                     links.append(link)
@@ -309,6 +314,10 @@ def main() -> int:
     if not links:
         print("❌ 未提取到任何节点链接")
         return 1
+
+    skipped = getattr(ex, "skipped_gold", 0)
+    if skipped:
+        print(f"⏭️ 跳过无凭据黄金节点: {skipped} 个（试用套餐不含黄金节点，服务端不下发 uuid）")
 
     with open("xunhu.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(links) + "\n")

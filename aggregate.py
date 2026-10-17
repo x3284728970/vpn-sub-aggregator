@@ -314,6 +314,38 @@ def count_by_type(links):
 
 
 # ================================================================
+# 确定性死节点过滤（不联网，纯参数级保险层）
+# ================================================================
+
+DEAD_UUID = "00000000-0000-0000-0000-000000000000"
+BAD_HOSTS = {"127.0.0.1", "0.0.0.0", "localhost", "::1"}
+
+
+def filter_dead_pairs(pairs):
+    """剔除参数上就注定连不上的节点：全零 uuid、回环地址、无效端口。
+    xunhu 历史上给无凭据黄金节点发全零 uuid 兜底，2026-10-17 起源头已停发，
+    这层兜底防止任何来源再混进同类死链。"""
+    import re
+    out, dropped = [], 0
+    for link, src in pairs:
+        base = link.split("#", 1)[0].lower()
+        bad = False
+        if DEAD_UUID in base:
+            bad = True
+        else:
+            m = re.match(r'^[a-z0-9]+://[^@/]+@([^:/?#]+):(\d+)', base)
+            if m and (m.group(1) in BAD_HOSTS or m.group(2) in ("0", "1")):
+                bad = True
+        if bad:
+            dropped += 1
+        else:
+            out.append((link, src))
+    if dropped:
+        print(f"[*] 死节点过滤：剔除 {dropped} 个（全零uuid/回环地址/无效端口）")
+    return out
+
+
+# ================================================================
 # main
 # ================================================================
 
@@ -353,6 +385,10 @@ def main():
     # 合并去重
     pairs = merge_all(files)
     print(f"\n[*] 合并去重后共 {len(pairs)} 个节点")
+
+    # 确定性死节点过滤（全零 uuid / 回环地址 / 无效端口）
+    pairs = filter_dead_pairs(pairs)
+    print(f"[*] 过滤后剩余 {len(pairs)} 个节点")
 
     # 按「VPN名+地区」统一重命名
     merged = naming.apply(pairs)
