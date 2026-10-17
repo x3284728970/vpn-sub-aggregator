@@ -376,7 +376,7 @@ def main():
     # ipow.py：旧链路（订阅 /sub/<hash> + P2P capability）上游已下线（503
     #   nodes_unavailable / p2p_dht_capability_unavailable，2026-10-17 起常态），
     #   换成 configs 现行链路（POST /v1/vpn/configs，不依赖订阅状态）
-    results["ipow_configs.py"] = run_script("ipow_configs.py", env={"IPOW_BASE_URL": os.environ.get("IPOW_BASE_URL", "").strip()})
+    results["ipow_configs.py"] = run_script("ipow_configs.py")
     # 老脚本保留作参考，不再调度：results["ipow.py"] = run_script("ipow.py", args=["--links-scope", "all"])
     # kite.py 已删除（2026-10-07，kite-daily 连挂后用户弃用）
 
