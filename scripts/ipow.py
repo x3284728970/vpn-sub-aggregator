@@ -727,6 +727,10 @@ def register_new(http, bind_code):
         rec["bind"] = {"code": bind_code, "status": st,
                        "usage_bonus_granted": bd.get("usage_bonus_granted") if isinstance(bd, dict) else None}
     path = os.path.join(STATE, "extract_accounts.jsonl")
+    try:
+        os.makedirs(STATE, exist_ok=True)   # CI 检出工作区没有 state 目录，首次注册需要自建
+    except OSError:
+        pass
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     try:
