@@ -57,6 +57,7 @@ EXPECTED_NODE_FILES = {
     "de.py": ["nodes.txt", "devpn.txt"],
     "sulian.py": ["sulian.txt", "sulianb.txt", "sulianc.txt"],
     "lanmao.py": ["lanmao.txt", "lanmao_sub_base64.txt"],
+    "ipow_configs.py": ["iPoW.txt"],
     "ipow.py": ["iPoW.txt"],
     # fengniao.py 不加（用户自己单独用）
 }
@@ -372,8 +373,11 @@ def main():
     # de.py / lanmao.py moved to the panel, not aggregated here
     # results["devpn.py"] = run_script("devpn.py")
     # results["lanmao.py"] = run_script("lanmao.py")
-    # ipow.py：订阅 + P2P 两路并发采集，接口有请求频率闸门（撞 429 自动降速重试）
-    results["ipow.py"] = run_script("ipow.py", args=["--links-scope", "all"])
+    # ipow.py：旧链路（订阅 /sub/<hash> + P2P capability）上游已下线（503
+    #   nodes_unavailable / p2p_dht_capability_unavailable，2026-10-17 起常态），
+    #   换成 configs 现行链路（POST /v1/vpn/configs，不依赖订阅状态）
+    results["ipow_configs.py"] = run_script("ipow_configs.py", env={"IPOW_BASE_URL": os.environ.get("IPOW_BASE_URL", "").strip()})
+    # 老脚本保留作参考，不再调度：results["ipow.py"] = run_script("ipow.py", args=["--links-scope", "all"])
     # kite.py 已删除（2026-10-07，kite-daily 连挂后用户弃用）
 
     # 收集输出文件
